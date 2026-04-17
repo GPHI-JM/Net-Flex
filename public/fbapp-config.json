@@ -1,0 +1,18 @@
+{
+  "instant_games": {
+    "platform_version": "6.3",
+    "orientation": "PORTRAIT",
+    "navigation_menu_version": "NAV_BAR",
+    "custom_update_templates": {},
+    "loading_screen": {
+      "background_color": "#000000",
+      "progress_bar_color": "#00FF00"
+    },
+    "debug": false
+  },
+  "name": "Vue Phaser Boilerplate",
+  "start_url": "index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#000000"
+}
