@@ -20,8 +20,9 @@
           type="text"
           inputmode="numeric"
           pattern="[0-9]*"
-          placeholder="09XXXXXXXXX or 639XXXXXXXXX"
+          placeholder="9XXXXXXXXX"
           @input="sanitizePhone"
+          @keydown="handlePhoneKeydown"
           maxlength="12"
           autocomplete="off"
         />
@@ -46,8 +47,19 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import Phaser from "phaser";
 import MainScene from "../scenes/MainScene";
-import { verifyPhoneWithAxios } from "../services/phoneVerification";
+import { normalizePhilippineMobileNumber, verifyPhoneWithAxios } from "../services/phoneVerification";
 import { initFB } from "../services/fbInit";
+
+const injectedGameMeta =
+  typeof window !== "undefined" ? (window.__currentGameMeta || window.__gameMeta || {}) : {};
+const GAME_ID = injectedGameMeta.gameId || import.meta.env.VITE_GAME_ID || "";
+const GAME_SECRET_KEY =
+  injectedGameMeta.gamesecretkey ||
+  import.meta.env.VITE_GAME_SECRET_KEY ||
+  "e4b7c9f1a2d34e8b9f6a1c7d0e5f2a3b4c8d9e7f6a1b2c3d4e5f6a7b8c9d0e1f";
+const GAME_ICON_PATH = new URL("../assets/icons/nf_icon.png", import.meta.url).href;
+const GAME_URL = "https://fb.gg/play/1431508008453701";
+const GAME_SLUG = "net-flex";
 
 const maxLives = 5;
 const lives = ref(maxLives);
@@ -62,11 +74,23 @@ const successMessage = ref("Your session was created successfully.");
 const gameRoot = ref(null);
 let game = null;
 let pendingSuccessReset = null;
-const phPhoneRegex = /^(09\d{9}|639\d{9})$/;
 const MIN_GAME_WIDTH = 320;
 const MIN_GAME_HEIGHT = 480;
 
-const isPhoneValid = computed(() => phPhoneRegex.test(phoneNumber.value));
+const currentGameMeta = {
+  gameId: GAME_ID,
+  gamesecretkey: GAME_SECRET_KEY,
+  game_icon_path: GAME_ICON_PATH,
+  game_url: GAME_URL,
+  game_slug: GAME_SLUG
+};
+
+if (typeof window !== "undefined") {
+  window.__currentGameMeta = currentGameMeta;
+}
+
+const normalizedPhoneNumber = computed(() => normalizePhilippineMobileNumber(phoneNumber.value));
+const isPhoneValid = computed(() => normalizedPhoneNumber.value.length === 10);
 
 function isMobileTabletDevice() {
   const ua = navigator.userAgent || "";
@@ -79,6 +103,31 @@ function isMobileTabletDevice() {
 function sanitizePhone() {
   phoneNumber.value = phoneNumber.value.replace(/\D+/g, "").slice(0, 12);
   verifyError.value = "";
+}
+
+function handlePhoneKeydown(event) {
+  const allowedKeys = new Set([
+    "Backspace",
+    "Delete",
+    "ArrowLeft",
+    "ArrowRight",
+    "ArrowUp",
+    "ArrowDown",
+    "Tab",
+    "Home",
+    "End",
+    "Enter"
+  ]);
+
+  if (allowedKeys.has(event.key) || event.ctrlKey || event.metaKey) {
+    return;
+  }
+
+  if (/^\d$/.test(event.key)) {
+    return;
+  }
+
+  event.preventDefault();
 }
 
 function getGameViewport() {
@@ -140,6 +189,9 @@ function syncLivesToScene() {
   const scene = getMainScene();
   if (!scene || typeof scene.setLivesFromVue !== "function") return;
   scene.setLivesFromVue(lives.value, maxLives);
+  if (typeof scene.setCurrentGameMeta === "function") {
+    scene.setCurrentGameMeta(currentGameMeta);
+  }
 }
 
 function pauseMainScene() {
@@ -193,10 +245,19 @@ function startGame() {
 }
 
 async function verifyPhoneForReset(phone) {
-  if (!phPhoneRegex.test(phone)) {
+  const normalizedPhone = normalizePhilippineMobileNumber(phone);
+  if (!normalizedPhone) {
     throw new Error("Invalid PH mobile number");
   }
-  const response = await verifyPhoneWithAxios(phone);
+  const scene = getMainScene();
+  const points = Number(scene?.score) || 0;
+  const response = await verifyPhoneWithAxios({
+    game_id: currentGameMeta.gameId,
+    gamesecretkey: currentGameMeta.gamesecretkey,
+    phone: normalizedPhone,
+    game_icon_path: currentGameMeta.game_icon_path,
+    points
+  });
   if (!response?.success) {
     throw new Error(
       response?.message ||
@@ -235,7 +296,7 @@ function acknowledgeSuccess() {
 async function verifyAndRestart() {
   if (!game) return;
   if (!isPhoneValid.value) {
-    verifyError.value = "Enter a valid PH mobile number (09XXXXXXXXX or 639XXXXXXXXX).";
+    verifyError.value = "Enter a valid PH mobile number (9XXXXXXXXX).";
     return;
   }
   isVerifying.value = true;
@@ -251,11 +312,7 @@ async function verifyAndRestart() {
     pendingSuccessReset = restartGameSession;
     showSuccessModal.value = true;
   } catch (err) {
-    verifyError.value =
-      err?.response?.data?.message ||
-      err?.response?.data?.error ||
-      err?.message ||
-      "Verification failed. Please try again.";
+    verifyError.value = err?.message || "Verification failed. Please try again.";
   } finally {
     isVerifying.value = false;
   }

@@ -56,9 +56,15 @@ function normalizeGameItem(game, index) {
   return {
     id: game.id ?? game.gameId ?? game.game_id ?? fallbackId,
     name: game.name ?? game.gameName ?? game.game_name ?? game.title ?? fallbackName,
+    slug: game.slug ?? game.gameSlug ?? game.game_slug ?? game.key ?? "",
     icon: game.icon ?? game.iconKey ?? game.icon_key ?? game.code ?? String(fallbackId).padStart(2, "0"),
     url: game.url ?? game.launchUrl ?? game.launch_url ?? game.gameUrl ?? "",
   };
+}
+
+function getCurrentGameMeta() {
+  if (typeof globalThis === "undefined") return null;
+  return globalThis.__currentGameMeta || globalThis.__gameMeta || null;
 }
 
 const CFG = {
@@ -155,6 +161,7 @@ export default class MainScene extends Phaser.Scene {
     this.gameSelectButton = null;
     this.gameModal = null;
     this.gameModalPage = 0;
+    this.currentGameMeta = getCurrentGameMeta();
     this.setGames(DEFAULT_GAMES);
   }
 
@@ -164,9 +171,24 @@ export default class MainScene extends Phaser.Scene {
       .map((game, index) => normalizeGameItem(game, index))
       .filter(Boolean);
 
+    const meta = this.currentGameMeta || getCurrentGameMeta();
+    const currentGameId = String(meta?.gameId ?? meta?.game_id ?? "");
+    const currentGameSlug = String(meta?.game_slug ?? meta?.gameSlug ?? "");
+    const currentGameUrl = String(meta?.game_url ?? meta?.gameUrl ?? "");
+
     this.games = normalizedGames.length > 0
-      ? normalizedGames
-      : DEFAULT_GAMES.map((game, index) => normalizeGameItem(game, index));
+      ? normalizedGames.filter((game) => {
+        if (currentGameId && String(game.id) === currentGameId) return false;
+        if (currentGameSlug && String(game.slug) === currentGameSlug) return false;
+        if (currentGameUrl && String(game.url) === currentGameUrl) return false;
+        return true;
+      })
+      : DEFAULT_GAMES.map((game, index) => normalizeGameItem(game, index)).filter((game) => {
+        if (currentGameId && String(game.id) === currentGameId) return false;
+        if (currentGameSlug && String(game.slug) === currentGameSlug) return false;
+        if (currentGameUrl && String(game.url) === currentGameUrl) return false;
+        return true;
+      });
 
     if (!this.games.some((game) => game.id === this.selectedGameId)) {
       this.selectedGameId = this.games[0]?.id ?? null;
@@ -417,6 +439,11 @@ export default class MainScene extends Phaser.Scene {
     } else {
       this.pauseTempMusicLoop();
     }
+  }
+
+  setCurrentGameMeta(meta) {
+    this.currentGameMeta = meta || null;
+    this.setGames(this.games);
   }
 
   // Temporary background music loop (replace with real track later).
@@ -748,16 +775,16 @@ export default class MainScene extends Phaser.Scene {
     }
 
     const baseBallSize = width * (isCompact ? 0.155 : 0.072);
-    const ballSize = Phaser.Math.Clamp(baseBallSize, isCompact ? 120 : 72, isCompact ? 160 : 128);
+    const ballSize = Phaser.Math.Clamp(baseBallSize, isCompact ? 108 : 72, isCompact ? 148 : 128);
 
     const boardW = isCompact
-      ? Phaser.Math.Clamp(width * 0.84, 380, 660)
+      ? Phaser.Math.Clamp(width * 0.80, 340, 620)
       : Phaser.Math.Clamp(width * 0.27, 420, 520);
     const boardScale = boardW / this.board.width;
     this.board.setScale(boardScale);
     this.board.setPosition(
       width * 0.5,
-      Phaser.Math.Clamp(height * (isCompact ? 0.40 : 0.30), height * 0.32, height * 0.48)
+      Phaser.Math.Clamp(height * (isCompact ? 0.38 : 0.30), height * 0.30, height * 0.46)
     );
 
     if (!isCompact) {
@@ -861,7 +888,6 @@ export default class MainScene extends Phaser.Scene {
 
   createGameSlotUI() {
     this.gameSelectButton = this.add.image(0, 0, "gameIcon");
-    this.gameSelectButton.setScale(0.6);
     this.gameSelectButton.setDepth(100);
     this.gameSelectButton.setInteractive({ cursor: "pointer" });
 
@@ -900,13 +926,13 @@ export default class MainScene extends Phaser.Scene {
         // Play splash effect
         this.tweens.add({
           targets: this.gameSelectButton,
-          scale: { from: 0.6, to: 1 },
+          scale: { from: this.gameSelectButton.scale || 0.6, to: (this.gameSelectButton.scale || 0.6) + 0.22 },
           alpha: { from: 0.8, to: 0 },
           duration: 300,
           ease: "Cubic.easeOut",
           yoyo: true,
           onComplete: () => {
-            this.gameSelectButton.setScale(0.6).setAlpha(1);
+            this.gameSelectButton.setAlpha(1);
             this.showGameModal(); // open modal only on click
           }
         });
@@ -924,38 +950,41 @@ export default class MainScene extends Phaser.Scene {
     const width = this.scale.width;
     const height = this.scale.height;
     const isCompact = width < 900 || height > width;
-    const modalWidth = isCompact ? width * 0.88 : Math.min(600, width * 0.5);
-    const modalHeight = isCompact ? height * 0.6 : height * 0.7;
+    const modalWidth = isCompact ? Math.min(width * 0.92, 560) : Math.min(600, width * 0.5);
+    const modalHeight = isCompact ? Math.min(height * 0.68, height - 96) : height * 0.7;
     const panelX = width / 2;
     const panelY = height / 2;
+    const panelShadow = this.add
+      .rectangle(panelX + 8, panelY + 12, modalWidth, modalHeight, 0x00ff88, 0.14)
+      .setDepth(300);
 
     const modalBg = this.add
       .rectangle(width / 2, height / 2, width, height, 0x000000, 0.5)
       .setInteractive()
-      .setDepth(300);
+      .setDepth(301);
 
     const panel = this.add
       .rectangle(panelX, panelY, modalWidth, modalHeight, 0x111111, 0.95)
-      .setStrokeStyle(3, 0x00ff88, 1)
-      .setDepth(301);
+      .setStrokeStyle(2, 0xffd447, 0.22)
+      .setDepth(302);
 
     const titleY = panelY - modalHeight / 2 + 36;
     const title = this.add
       .text(panelX, titleY, "CHOOSE GAME", {
         fontFamily: "Arial Black, Arial, sans-serif",
-        fontSize: "24px",
+        fontSize: isCompact ? "26px" : "24px",
         color: "#00ff88",
         align: "center"
       })
       .setOrigin(0.5)
-      .setDepth(302);
+      .setDepth(303);
 
     const columns = 2;
     const cardGap = isCompact ? 16 : 20;
-    const panelPaddingX = 20;
-    const panelPaddingTop = 76;
-    const panelPaddingBottom = 58;
-    const minCardHeight = isCompact ? 116 : 130;
+    const panelPaddingX = isCompact ? 18 : 20;
+    const panelPaddingTop = isCompact ? 68 : 76;
+    const panelPaddingBottom = isCompact ? 46 : 58;
+    const minCardHeight = isCompact ? 132 : 140;
     const cardWidth = (modalWidth - panelPaddingX * 2 - cardGap) / columns;
     const availableGridHeight = modalHeight - panelPaddingTop - panelPaddingBottom;
     const maxRows = Math.max(1, Math.floor((availableGridHeight + cardGap) / (minCardHeight + cardGap)));
@@ -978,46 +1007,61 @@ export default class MainScene extends Phaser.Scene {
       const itemY = gridTop + row * (cardHeight + cardGap);
       const itemCenterX = itemX + cardWidth / 2;
       const itemCenterY = itemY + cardHeight / 2;
+      const isSelected = String(game.id) === String(this.selectedGameId);
+      const shadowColor = isSelected ? 0x00ff88 : 0xffd400;
+      const shadowAlpha = isSelected ? 0.18 : 0.14;
+      const shadowSpread = isCompact ? 12 : 10;
+
+      const itemShadow = this.add
+        .rectangle(
+          itemCenterX,
+          itemCenterY,
+          cardWidth + shadowSpread,
+          cardHeight + shadowSpread,
+          shadowColor,
+          shadowAlpha
+        )
+        .setDepth(302);
 
       const itemBg = this.add
-        .rectangle(itemCenterX, itemCenterY, cardWidth, cardHeight, 0x1a1a1a, 0.78)
-        .setStrokeStyle(2, 0xffd400, 1)
-        .setDepth(302);
+        .rectangle(itemCenterX, itemCenterY, cardWidth, cardHeight, 0x161616, 0.92)
+        .setStrokeStyle(2, shadowColor, isSelected ? 0.55 : 0.36)
+        .setDepth(303);
 
       let iconElement;
       if (GAME_IMAGE_ICON_KEYS.has(game.icon)) {
         iconElement = this.add.image(itemCenterX, itemCenterY - 16, game.icon)
-          .setDisplaySize(60, 60)
+          .setDisplaySize(isCompact ? 92 : 84, isCompact ? 92 : 84)
           .setOrigin(0.5)
-          .setDepth(302);
+          .setDepth(304);
       } else {
         iconElement = this.add.text(itemCenterX, itemCenterY - 20, game.icon, {
           fontFamily: "Arial Black, Arial, sans-serif",
           fontSize: "18px",
           color: "#ffffff",
           align: "center"
-        }).setOrigin(0.5).setDepth(302);
+        }).setOrigin(0.5).setDepth(304);
       }
 
       const gameNameText = this.add
         .text(itemCenterX, itemCenterY + 36, game.name, {
           fontFamily: "Arial Black, Arial, sans-serif",
-          fontSize: "16px",
+          fontSize: isCompact ? "17px" : "16px",
           color: "#ffffff",
           align: "center",
           wordWrap: { width: cardWidth - 24 }
         })
         .setOrigin(0.5)
-        .setDepth(302);
+        .setDepth(304);
 
       const itemContainer = this.add.container(0, 0);
-      itemContainer.add([itemBg, iconElement, gameNameText]);
+      itemContainer.add([itemShadow, itemBg, iconElement, gameNameText]);
       itemContainer.setSize(cardWidth, cardHeight);
       itemContainer.setInteractive(
         new Phaser.Geom.Rectangle(itemX, itemY, cardWidth, cardHeight),
         Phaser.Geom.Rectangle.Contains
       );
-      itemContainer.setDepth(302);
+      itemContainer.setDepth(304);
 
       itemContainer.on("pointerdown", () => {
         this.selectedGameId = game.id;
@@ -1028,13 +1072,15 @@ export default class MainScene extends Phaser.Scene {
       });
 
       itemContainer.on("pointerover", () => {
-        itemBg.setFillStyle(0x2a2a2a, 0.95);
-        itemBg.setStrokeStyle(2, 0x00ff88, 1);
+        itemShadow.setFillStyle(isSelected ? 0x00ff88 : 0xffd400, isSelected ? 0.22 : 0.18);
+        itemBg.setFillStyle(0x1f1f1f, 0.98);
+        itemBg.setStrokeStyle(2, isSelected ? 0x00ff88 : 0xffd447, isSelected ? 0.7 : 0.48);
       });
 
       itemContainer.on("pointerout", () => {
-        itemBg.setFillStyle(0x1a1a1a, 0.8);
-        itemBg.setStrokeStyle(2, 0xffd400, 1);
+        itemShadow.setFillStyle(shadowColor, shadowAlpha);
+        itemBg.setFillStyle(0x161616, 0.92);
+        itemBg.setStrokeStyle(2, shadowColor, isSelected ? 0.55 : 0.36);
       });
 
       gameItems.push(itemContainer);
@@ -1054,7 +1100,7 @@ export default class MainScene extends Phaser.Scene {
           align: "center"
         })
         .setOrigin(0.5)
-        .setDepth(302);
+        .setDepth(304);
 
       prevButton = this.add
         .text(panelX - 90, navY, "< PREV", {
@@ -1063,7 +1109,7 @@ export default class MainScene extends Phaser.Scene {
           color: this.gameModalPage > 0 ? "#ffd400" : "#666666"
         })
         .setOrigin(0.5)
-        .setDepth(302);
+        .setDepth(304);
 
       nextButton = this.add
         .text(panelX + 90, navY, "NEXT >", {
@@ -1072,7 +1118,7 @@ export default class MainScene extends Phaser.Scene {
           color: this.gameModalPage < totalPages - 1 ? "#ffd400" : "#666666"
         })
         .setOrigin(0.5)
-        .setDepth(302);
+        .setDepth(304);
 
       if (this.gameModalPage > 0) {
         prevButton.setInteractive({ cursor: "pointer" });
@@ -1095,7 +1141,7 @@ export default class MainScene extends Phaser.Scene {
 
     modalBg.on("pointerdown", () => this.closeGameModal());
 
-    this.gameModal = [modalBg, panel, title, ...gameItems, prevButton, pageLabel, nextButton].filter(Boolean);
+    this.gameModal = [modalBg, panelShadow, panel, title, ...gameItems, prevButton, pageLabel, nextButton].filter(Boolean);
   }
 
   closeGameModal() {
@@ -1119,15 +1165,20 @@ export default class MainScene extends Phaser.Scene {
     const isCompact = isMobile || isPortrait;
 
     if (this.gameSelectButton) {
-      const ballStartY = this.scale.height - Math.max(this.ball.displayHeight * 0.9, 78) - 100;
-      const ballCenterX = width / 2;
-      
       if (isCompact) {
-        // Mobile: position lower than the ball area
-        this.gameSelectButton.setPosition(ballCenterX, ballStartY + 120);
+        const marginX = Math.max(14, Math.round(width * 0.04));
+        const marginY = Math.max(14, Math.round(height * 0.03));
+        const buttonScale = Math.min(0.72, Math.max(0.62, width / 600));
+        this.gameSelectButton
+          .setOrigin(1, 1)
+          .setScale(buttonScale)
+          .setPosition(width - marginX, height - marginY);
       } else {
         // Desktop: position at the right side
-        this.gameSelectButton.setPosition(width - 80, height / 2);
+        this.gameSelectButton
+          .setOrigin(1, 0.5)
+          .setScale(0.62)
+          .setPosition(width - 80, height / 2);
       }
     }
   }
