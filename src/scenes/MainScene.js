@@ -39,10 +39,10 @@ const NET_SCORE_FRAMES = [
 ];
 
 const DEFAULT_GAMES = [
-  // { id: 1, name: "Basketball", icon: "nfIcon", url: "https://fb.gg/play/1431508008453701" },
-  { id: 2, name: "Tek Hen", icon: "tekhen_icon", url: "" },
-  { id: 3, name: "Power Hammer", icon: "phIcon", url: "https://fb.gg/play/4166337263499439" },
-  { id: 4, name: "Bingo Fiesta", icon: "bfIcon", url: "" },
+  { id: 1, name: "Power Hammer", icon: "phIcon", url: "https://fb.gg/play/4166337263499439" },
+  { id: 2, name: "Bingo Fiesta", icon: "bfIcon", url: "https://fb.gg/play/1463506198613599" },
+  { id: 3, name: "Net Flex", icon: "nfIcon", url: "https://fb.gg/play/1431508008453701" },
+  { id: 4, name: "Tek Hen", icon: "tekhen_icon", url: "https://fb.gg/play/2136783867072234" },
 ];
 
 const GAME_IMAGE_ICON_KEYS = new Set(["nfIcon", "tekhen_icon", "phIcon", "bfIcon"]);
@@ -59,7 +59,14 @@ function normalizeGameItem(game, index) {
     slug: game.slug ?? game.gameSlug ?? game.game_slug ?? game.key ?? "",
     icon: game.icon ?? game.iconKey ?? game.icon_key ?? game.code ?? String(fallbackId).padStart(2, "0"),
     url: game.url ?? game.launchUrl ?? game.launch_url ?? game.gameUrl ?? "",
+    appId: game.appId ?? game.app_id ?? extractFbAppId(game.url ?? game.launchUrl ?? game.launch_url ?? game.gameUrl ?? ""),
   };
+}
+
+function extractFbAppId(url) {
+  const value = String(url || "");
+  const match = value.match(/fb\.gg\/play\/(\d+)/i);
+  return match?.[1] ?? "";
 }
 
 function getCurrentGameMeta() {
@@ -110,6 +117,14 @@ export default class MainScene extends Phaser.Scene {
     this.dragStartX = 0;
     this.dragStartY = 0;
     this.dragStartTime = 0;
+    this.dragPointerStartX = 0;
+    this.dragPointerStartY = 0;
+    this.dragPointerDx = 0;
+    this.dragPointerDy = 0;
+    this.releaseSwipeX = 0;
+    this.releaseSwipeY = 0;
+    this.prevPointerX = 0;
+    this.prevPointerY = 0;
     this.prevDragX = 0;
     this.prevDragY = 0;
     this.lastDragDx = 0;
@@ -175,18 +190,21 @@ export default class MainScene extends Phaser.Scene {
     const currentGameId = String(meta?.gameId ?? meta?.game_id ?? "");
     const currentGameSlug = String(meta?.game_slug ?? meta?.gameSlug ?? "");
     const currentGameUrl = String(meta?.game_url ?? meta?.gameUrl ?? "");
+    const currentGameAppId = String(meta?.game_app_id ?? meta?.gameAppId ?? meta?.appId ?? extractFbAppId(currentGameUrl));
 
     this.games = normalizedGames.length > 0
       ? normalizedGames.filter((game) => {
         if (currentGameId && String(game.id) === currentGameId) return false;
         if (currentGameSlug && String(game.slug) === currentGameSlug) return false;
         if (currentGameUrl && String(game.url) === currentGameUrl) return false;
+        if (currentGameAppId && String(game.appId) === currentGameAppId) return false;
         return true;
       })
       : DEFAULT_GAMES.map((game, index) => normalizeGameItem(game, index)).filter((game) => {
         if (currentGameId && String(game.id) === currentGameId) return false;
         if (currentGameSlug && String(game.slug) === currentGameSlug) return false;
         if (currentGameUrl && String(game.url) === currentGameUrl) return false;
+        if (currentGameAppId && String(game.appId) === currentGameAppId) return false;
         return true;
       });
 
@@ -199,6 +217,39 @@ export default class MainScene extends Phaser.Scene {
     if (wasModalOpen) {
       this.closeGameModal();
       this.showGameModal();
+    }
+  }
+
+  async launchGameEntry(entry) {
+    if (!entry) return;
+
+    const appId = String(entry.appId || extractFbAppId(entry.url || ""));
+    const isInstant = typeof window !== "undefined" && typeof window.FBInstant !== "undefined";
+    const switchData = {
+      referrer: "game_switch",
+      from_game_slug: String(this.currentGameMeta?.game_slug ?? ""),
+      target_game_slug: String(entry.slug ?? ""),
+    };
+
+    if (isInstant && appId && typeof window.FBInstant.switchGameAsync === "function") {
+      try {
+        await window.FBInstant.switchGameAsync(appId, switchData);
+        return;
+      } catch (_) {
+        // If switching fails, keep the fallback web launch for non-Instant contexts.
+      }
+    }
+
+    if (entry.url) {
+      try {
+        if (window.top && window.top !== window) {
+          window.top.location.href = entry.url;
+        } else {
+          window.location.href = entry.url;
+        }
+      } catch (_) {
+        window.location.href = entry.url;
+      }
     }
   }
 
@@ -340,14 +391,14 @@ export default class MainScene extends Phaser.Scene {
     const height = this.scale.height;
     const isDesktop = Boolean(this.sys.game.device?.os?.desktop);
     const isCompact = width < 900 || height > width;
-    const panelWidth = isDesktop ? Math.min(520, width * 0.55) : Math.min(340, width * (isCompact ? 0.76 : 0.84));
-    const titleFontPx = isDesktop ? 34 : Math.round(Phaser.Math.Clamp(width * 0.055, 18, 24));
-    const labelFontPx = isDesktop ? 30 : Math.round(Phaser.Math.Clamp(width * 0.048, 16, 20));
-    const valueFontPx = isDesktop ? 26 : Math.round(Phaser.Math.Clamp(width * 0.042, 14, 18));
-    const topPad = isDesktop ? 28 : 18;
-    const rowGap = isDesktop ? 58 : Math.round(Phaser.Math.Clamp(height * 0.05, 30, 40));
-    const valueGap = isDesktop ? 34 : Math.round(Phaser.Math.Clamp(height * 0.028, 16, 24));
-    const bottomPad = isDesktop ? 26 : 16;
+    const panelWidth = isDesktop ? Math.min(520, width * 0.55) : Math.min(500, width * (isCompact ? 0.9 : 0.84));
+    const titleFontPx = isDesktop ? 34 : Math.round(Phaser.Math.Clamp(width * 0.065, 22, 28));
+    const labelFontPx = isDesktop ? 30 : Math.round(Phaser.Math.Clamp(width * 0.054, 18, 24));
+    const valueFontPx = isDesktop ? 26 : Math.round(Phaser.Math.Clamp(width * 0.046, 16, 22));
+    const topPad = isDesktop ? 28 : 30;
+    const rowGap = isDesktop ? 58 : Math.round(Phaser.Math.Clamp(height * 0.07, 44, 62));
+    const valueGap = isDesktop ? 34 : Math.round(Phaser.Math.Clamp(height * 0.036, 22, 32));
+    const bottomPad = isDesktop ? 26 : 30;
     const modalHeight = Math.round(topPad + titleFontPx + rowGap + labelFontPx + valueGap + valueFontPx + bottomPad);
     const panelX = width / 2;
     const panelY = height / 2;
@@ -358,7 +409,7 @@ export default class MainScene extends Phaser.Scene {
     const row1Y = titleY + rowGap;
     const leftColX = panelLeft + padX;
     const panelRight = panelLeft + panelWidth;
-    const toggleX = panelRight - padX - (isDesktop ? 34 : 28);
+    const toggleX = panelRight - padX - (isDesktop ? 34 : 34);
 
     const modalBg = this.add
       .rectangle(width / 2, height / 2, width, height, 0x000000, 0.45)
@@ -401,7 +452,7 @@ export default class MainScene extends Phaser.Scene {
     
     const syncAudioUi = () => {
       audioStateButton.setTexture(this.audioEnabled ? "audioOn" : "audioOff");
-      audioStateButton.setScale(isDesktop ? 0.40 : 0.34);
+      audioStateButton.setScale(isDesktop ? 0.40 : 0.42);
       audioStateButton.setTint(this.audioEnabled ? 0xfff08a : 0xffffff);
       audioStateButton.setAlpha(this.audioEnabled ? 1 : 0.82);
       musicValue.setText(this.audioEnabled ? "ON" : "OFF");
@@ -697,7 +748,7 @@ export default class MainScene extends Phaser.Scene {
     const isCompact = isMobile || isPortraitTablet;
     const refScale = Phaser.Math.Clamp(Math.min(width / 1920, height / 1080), 0.62, 1.15);
     const hudScale = isCompact
-      ? Phaser.Math.Clamp(width / 980, 0.68, 1.02)
+      ? Phaser.Math.Clamp(width / 820, 0.92, 1.18)
       : Phaser.Math.Clamp(width / 1920, 0.62, 1.08);
     const throwScale = Phaser.Math.Clamp((scaleX + scaleY) * 0.5, 0.86, 1.04);
 
@@ -723,23 +774,21 @@ export default class MainScene extends Phaser.Scene {
     } else {
       this.bg.setDisplaySize(width, height);
     }
-    if(isCompact){
-      CFG.baseThrowStrength = 1.2;
-    }
+    CFG.baseThrowStrength = isCompact ? 1.46 : 1.18;
     this.throwStrengthScale = throwScale * CFG.baseThrowStrength;
-    this.ballFlightScale = Phaser.Math.Clamp(1 + (refScale - 0.8) * 0.08, 0.65, 0.74);
+    this.ballFlightScale = Phaser.Math.Clamp(1 + (refScale - 0.8) * 0.08, 0.56, 0.72);
 
     if (isCompact) {
-      const leftPanelScale = 0.43 * hudScale;
+      const leftPanelScale = 0.54 * hudScale;
       this.leftPanel.setOrigin(0, 0).setScale(leftPanelScale).setPosition(marginX, panelTop);
 
-      const rightPanelScale = 0.34 * hudScale;
+      const rightPanelScale = 0.43 * hudScale;
       this.rightPanel
         .setOrigin(0, 0)
         .setScale(rightPanelScale)
         .setPosition(this.leftPanel.x, this.leftPanel.y + this.leftPanel.displayHeight + panelGapY - 15);
 
-      this.gear.setOrigin(1, 0).setScale(0.48 * hudScale).setPosition(width - marginX, panelTop);
+      this.gear.setOrigin(1, 0).setScale(0.6 * hudScale).setPosition(width - marginX, panelTop);
     } else {
       // Desktop keeps the old style.
       const rightInset = width * 0.14;
@@ -761,7 +810,7 @@ export default class MainScene extends Phaser.Scene {
     this.lifeText.setPosition(rightPanelBounds.centerX, lifeBarY);
     this.lifeText.setFontSize(Phaser.Math.Clamp(Math.round(22 * hudScale), 13, 26));
 
-    const scoreFont = Phaser.Math.Clamp(Math.round((isCompact ? 34 : 64) * refScale), 20, isCompact ? 34 : 64);
+    const scoreFont = Phaser.Math.Clamp(Math.round((isCompact ? 44 : 64) * refScale), 24, isCompact ? 48 : 64);
     this.scoreText.setFontSize(scoreFont);
     if (isCompact) {
       this.scoreText.setOrigin(1, 0);
@@ -774,17 +823,17 @@ export default class MainScene extends Phaser.Scene {
       );
     }
 
-    const baseBallSize = width * (isCompact ? 0.155 : 0.072);
-    const ballSize = Phaser.Math.Clamp(baseBallSize, isCompact ? 108 : 72, isCompact ? 148 : 128);
+    const baseBallSize = width * (isCompact ? 0.225 : 0.078);
+    const ballSize = Phaser.Math.Clamp(baseBallSize, isCompact ? 154 : 84, isCompact ? 206 : 140);
 
     const boardW = isCompact
-      ? Phaser.Math.Clamp(width * 0.80, 340, 620)
-      : Phaser.Math.Clamp(width * 0.27, 420, 520);
+      ? Phaser.Math.Clamp(width * 0.9, 420, 780)
+      : Phaser.Math.Clamp(width * 0.29, 460, 580);
     const boardScale = boardW / this.board.width;
     this.board.setScale(boardScale);
     this.board.setPosition(
       width * 0.5,
-      Phaser.Math.Clamp(height * (isCompact ? 0.38 : 0.30), height * 0.30, height * 0.46)
+      Phaser.Math.Clamp(height * (isCompact ? 0.355 : 0.30), height * 0.26, height * 0.46)
     );
 
     if (!isCompact) {
@@ -809,12 +858,12 @@ export default class MainScene extends Phaser.Scene {
     this.hoopX = this.board.x;
     this.hoopY = this.board.y + this.board.displayHeight * 0.20;
 
-    const ringFromBoard = this.board.displayWidth * (isCompact ? 0.47 : 0.25);
-    const ringFromBall = ballSize * (isCompact ? 2.10 : 1.12);
+    const ringFromBoard = this.board.displayWidth * (isCompact ? 0.5 : 0.29);
+    const ringFromBall = ballSize * (isCompact ? 2.06 : 1.34);
     this.ringW = Phaser.Math.Clamp(
       Math.min(ringFromBoard, ringFromBall),
-      isCompact ? 160 : 150,
-      isCompact ? 255 : 142
+      isCompact ? 176 : 170,
+      isCompact ? 270 : 196
     );
     this.ringH = this.ringW * 0.70;
 
@@ -950,8 +999,19 @@ export default class MainScene extends Phaser.Scene {
     const width = this.scale.width;
     const height = this.scale.height;
     const isCompact = width < 900 || height > width;
-    const modalWidth = isCompact ? Math.min(width * 0.92, 560) : Math.min(600, width * 0.5);
-    const modalHeight = isCompact ? Math.min(height * 0.68, height - 96) : height * 0.7;
+    const modalWidth = isCompact ? Math.min(width * 0.97, 620) : Math.min(600, width * 0.5);
+    const columns = 2;
+    const cardGap = isCompact ? 12 : 20;
+    const panelPaddingX = isCompact ? 18 : 20;
+    const panelPaddingTop = isCompact ? 82 : 76;
+    const panelPaddingBottom = isCompact ? 60 : 58;
+    const minCardHeight = isCompact ? 190 : 140;
+    const modalHeight = isCompact
+      ? Math.min(
+        panelPaddingTop + panelPaddingBottom + minCardHeight * 2 + cardGap + 24,
+        height * 0.8
+      )
+      : height * 0.7;
     const panelX = width / 2;
     const panelY = height / 2;
     const panelShadow = this.add
@@ -979,12 +1039,6 @@ export default class MainScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setDepth(303);
 
-    const columns = 2;
-    const cardGap = isCompact ? 16 : 20;
-    const panelPaddingX = isCompact ? 18 : 20;
-    const panelPaddingTop = isCompact ? 68 : 76;
-    const panelPaddingBottom = isCompact ? 46 : 58;
-    const minCardHeight = isCompact ? 132 : 140;
     const cardWidth = (modalWidth - panelPaddingX * 2 - cardGap) / columns;
     const availableGridHeight = modalHeight - panelPaddingTop - panelPaddingBottom;
     const maxRows = Math.max(1, Math.floor((availableGridHeight + cardGap) / (minCardHeight + cardGap)));
@@ -994,7 +1048,10 @@ export default class MainScene extends Phaser.Scene {
     const pageStart = this.gameModalPage * pageSize;
     const visibleGames = this.games.slice(pageStart, pageStart + pageSize);
     const rowCount = Math.max(1, Math.ceil(visibleGames.length / columns));
-    const cardHeight = Math.max(minCardHeight, (availableGridHeight - cardGap * Math.max(0, rowCount - 1)) / rowCount);
+    const rawCardHeight = (availableGridHeight - cardGap * Math.max(0, rowCount - 1)) / rowCount;
+    const cardHeight = isCompact
+      ? Phaser.Math.Clamp(rawCardHeight, minCardHeight, 250)
+      : Math.max(minCardHeight, rawCardHeight);
     const gridTop = panelY - modalHeight / 2 + panelPaddingTop;
     const gridLeft = panelX - modalWidth / 2 + panelPaddingX;
     const gameItems = [];
@@ -1030,10 +1087,14 @@ export default class MainScene extends Phaser.Scene {
 
       let iconElement;
       if (GAME_IMAGE_ICON_KEYS.has(game.icon)) {
-        iconElement = this.add.image(itemCenterX, itemCenterY - 16, game.icon)
-          .setDisplaySize(isCompact ? 92 : 84, isCompact ? 92 : 84)
+        const iconMaxSize = isCompact
+          ? Math.min(cardWidth, cardHeight) * 0.9
+          : 300;
+        iconElement = this.add.image(itemCenterX, itemCenterY - 10, game.icon)
           .setOrigin(0.5)
           .setDepth(304);
+        const iconScale = Math.min(iconMaxSize / iconElement.width, iconMaxSize / iconElement.height);
+        iconElement.setScale(iconScale);
       } else {
         iconElement = this.add.text(itemCenterX, itemCenterY - 20, game.icon, {
           fontFamily: "Arial Black, Arial, sans-serif",
@@ -1043,47 +1104,44 @@ export default class MainScene extends Phaser.Scene {
         }).setOrigin(0.5).setDepth(304);
       }
 
-      const gameNameText = this.add
-        .text(itemCenterX, itemCenterY + 36, game.name, {
-          fontFamily: "Arial Black, Arial, sans-serif",
-          fontSize: isCompact ? "17px" : "16px",
-          color: "#ffffff",
-          align: "center",
-          wordWrap: { width: cardWidth - 24 }
-        })
-        .setOrigin(0.5)
-        .setDepth(304);
+      
 
       const itemContainer = this.add.container(0, 0);
-      itemContainer.add([itemShadow, itemBg, iconElement, gameNameText]);
-      itemContainer.setSize(cardWidth, cardHeight);
-      itemContainer.setInteractive(
-        new Phaser.Geom.Rectangle(itemX, itemY, cardWidth, cardHeight),
-        Phaser.Geom.Rectangle.Contains
-      );
+      itemContainer.add([itemShadow, itemBg, iconElement]);
       itemContainer.setDepth(304);
 
-      itemContainer.on("pointerdown", () => {
-        this.selectedGameId = game.id;
-        if (game.url) {
-          window.open(game.url, "_blank");
-        }
-        this.closeGameModal();
-      });
+      const hitTarget = this.add
+        .rectangle(itemCenterX, itemCenterY, cardWidth, cardHeight, 0xffffff, 0.001)
+        .setDepth(305)
+        .setInteractive({ cursor: "pointer", useHandCursor: true });
 
-      itemContainer.on("pointerover", () => {
+      let launchHandled = false;
+      const handleLaunch = async (pointer) => {
+        if (launchHandled) return;
+        launchHandled = true;
+        if (pointer?.event?.stopPropagation) {
+          pointer.event.stopPropagation();
+        }
+        this.selectedGameId = game.id;
+        this.closeGameModal();
+        await this.launchGameEntry(game);
+      };
+
+      hitTarget.on("pointerup", handleLaunch);
+
+      hitTarget.on("pointerover", () => {
         itemShadow.setFillStyle(isSelected ? 0x00ff88 : 0xffd400, isSelected ? 0.22 : 0.18);
         itemBg.setFillStyle(0x1f1f1f, 0.98);
         itemBg.setStrokeStyle(2, isSelected ? 0x00ff88 : 0xffd447, isSelected ? 0.7 : 0.48);
       });
 
-      itemContainer.on("pointerout", () => {
+      hitTarget.on("pointerout", () => {
         itemShadow.setFillStyle(shadowColor, shadowAlpha);
         itemBg.setFillStyle(0x161616, 0.92);
         itemBg.setStrokeStyle(2, shadowColor, isSelected ? 0.55 : 0.36);
       });
 
-      gameItems.push(itemContainer);
+      gameItems.push(itemContainer, hitTarget);
     }
 
     const navY = panelY + modalHeight / 2 - 28;
@@ -1166,9 +1224,9 @@ export default class MainScene extends Phaser.Scene {
 
     if (this.gameSelectButton) {
       if (isCompact) {
-        const marginX = Math.max(14, Math.round(width * 0.04));
-        const marginY = Math.max(14, Math.round(height * 0.03));
-        const buttonScale = Math.min(0.72, Math.max(0.62, width / 600));
+        const marginX = Math.max(18, Math.round(width * 0.05));
+        const marginY = Math.max(20, Math.round(height * 0.04));
+        const buttonScale = Phaser.Math.Clamp(width / 470, 0.78, 0.92);
         this.gameSelectButton
           .setOrigin(1, 1)
           .setScale(buttonScale)
@@ -1208,13 +1266,21 @@ export default class MainScene extends Phaser.Scene {
   }
 
   bindInput() {
-    this.input.on("dragstart", (_, gameObject) => {
+    this.input.on("dragstart", (pointer, gameObject) => {
       if (gameObject !== this.ball || this.playState !== "ready") return;
 
       this.playState = "aiming";
       this.dragStartX = this.ball.x;
       this.dragStartY = this.ball.y;
       this.dragStartTime = this.time.now;
+      this.dragPointerStartX = pointer.x;
+      this.dragPointerStartY = pointer.y;
+      this.dragPointerDx = 0;
+      this.dragPointerDy = 0;
+      this.releaseSwipeX = 0;
+      this.releaseSwipeY = 0;
+      this.prevPointerX = pointer.x;
+      this.prevPointerY = pointer.y;
       this.prevDragX = this.ball.x;
       this.prevDragY = this.ball.y;
       this.lastDragDx = 0;
@@ -1230,14 +1296,18 @@ export default class MainScene extends Phaser.Scene {
       Phaser.Physics.Matter.Matter.Body.set(this.ball.body, "isSensor", true);
     });
 
-    this.input.on("drag", (_, gameObject, dragX, dragY) => {
+    this.input.on("drag", (pointer, gameObject, dragX, dragY) => {
       if (gameObject !== this.ball || this.playState !== "aiming") return;
 
       const x = Phaser.Math.Clamp(dragX, this.ballRadius + 8, this.scale.width - this.ballRadius - 8);
-      const y = Phaser.Math.Clamp(dragY, this.throwLineY, this.scale.height - this.ballRadius - 8);
-      const stepDx = x - this.prevDragX;
-      const stepDy = y - this.prevDragY;
+      const y = Phaser.Math.Clamp(dragY, this.ballRadius + 8, this.scale.height - this.ballRadius - 8);
+      const stepDx = pointer.x - this.prevPointerX;
+      const stepDy = pointer.y - this.prevPointerY;
       this.ball.setPosition(x, y);
+      this.dragPointerDx = pointer.x - this.dragPointerStartX;
+      this.dragPointerDy = pointer.y - this.dragPointerStartY;
+      this.prevPointerX = pointer.x;
+      this.prevPointerY = pointer.y;
       this.prevDragX = x;
       this.prevDragY = y;
       this.lastDragDx = this.ball.x - this.dragStartX;
@@ -1245,95 +1315,70 @@ export default class MainScene extends Phaser.Scene {
       if (Math.hypot(stepDx, stepDy) >= 2) {
         this.swipeDx = stepDx;
         this.swipeDy = stepDy;
+        this.releaseSwipeX = stepDx;
+        this.releaseSwipeY = stepDy;
       }
 
-      const liftedUp = this.dragStartY - this.ball.y;
-      const upwardIntent = liftedUp > 0;
-      const topEdgeY = this.ball.y - this.ballRadius;
-      const reachedLimitByRadius = topEdgeY <= this.throwLineY;
-      if (!this.autoLaunchedFromLimit && upwardIntent && reachedLimitByRadius) {
-        this.autoLaunchedFromLimit = true;
-        this.launchAutoThrowFromDrag();
-      }
     });
 
-    this.input.on("dragend", (_, gameObject) => {
+    this.input.on("dragend", (pointer, gameObject) => {
       if (gameObject !== this.ball || this.playState !== "aiming") return;
-      if (this.autoLaunchedFromLimit) return;
 
       const dx = this.ball.x - this.dragStartX;
       const dy = this.ball.y - this.dragStartY;
-      const distance = Math.hypot(dx, dy);
-      const liftedUp = this.dragStartY - this.ball.y;
-      if (distance < CFG.minDragDistance || liftedUp < 20 || this.ball.y > this.throwLineY + 2) {
+      const pointerDx = this.dragPointerDx;
+      const pointerDy = this.dragPointerDy;
+      const distance = Math.max(Math.hypot(dx, dy), Math.hypot(pointerDx, pointerDy));
+      if (distance < CFG.minDragDistance) {
         this.resetBallToStart();
         return;
       }
 
-      // Always launch from the top release line.
-      const launchY = this.throwLineY + this.ballRadius;
-      this.ball.setPosition(this.ball.x, launchY);
-
       const dt = Math.max(16, this.time.now - this.dragStartTime);
-      this.launchBallFromDragVector(dx, dy, dt);
+      this.launchBallFromDragVector(dx, dy, dt, pointerDx, pointerDy);
     });
   }
 
-  launchBallFromDragVector(dx, dy, dt) {
-    const aim = this.getLaunchAimFromDrag(dx, dy);
-    const distance = Math.max(1, Math.hypot(dx, dy));
+  launchBallFromDragVector(dx, dy, dt, pointerDx = dx, pointerDy = dy) {
+    const releaseDx = Math.abs(this.releaseSwipeX) >= 1.5 ? this.releaseSwipeX : pointerDx;
+    const releaseDy = Math.abs(this.releaseSwipeY) >= 1.5 ? this.releaseSwipeY : pointerDy;
+    const aim = this.getLaunchAimFromDrag(releaseDx, releaseDy);
+    const distance = Math.max(1, Math.max(Math.hypot(dx, dy), Math.hypot(pointerDx, pointerDy)));
     const dragSpeed = distance / Math.max(16, dt);
-    const basePower = dragSpeed * 118 * this.throwStrengthScale;
+    const isCompact = this.scale.width < 900 || this.scale.height > this.scale.width;
+    const basePower = dragSpeed * (isCompact ? 142 : 120) * this.throwStrengthScale;
     const boostedPower = basePower * this.strengthPower;
-    const power = Phaser.Math.Clamp(boostedPower, 7.0, 22.0);
+    const power = Phaser.Math.Clamp(boostedPower, isCompact ? 12.4 : 10.6, isCompact ? 31.5 : 24.0);
 
-    const vx = Phaser.Math.Clamp(aim.x * power, -10.0, 10.0);
-    const vy = Phaser.Math.Clamp(aim.y * power, -24.0, -6.0);
+    const vx = Phaser.Math.Clamp(aim.x * power, -15.5, 15.5);
+    const vy = Phaser.Math.Clamp(aim.y * power, -42.0, -8.2);
     this.launchBall(vx, vy);
   }
 
-
-
-
   getLaunchAimFromDrag(dx, dy) {
-    const distance = Math.max(1, Math.hypot(dx, dy));
-    const dragDirX = dx / distance;
-    const dragDirY = dy / distance;
-
-    const absDragX = Math.abs(dragDirX);
-    const mostlyVerticalThrow = absDragX < 0.22 && dragDirY < -0.72;
-    if (mostlyVerticalThrow) {
-      return { x: 0, y: -1 };
-    }
-
-    return this.clampAimToPlayableArc(dragDirX, dragDirY);
-  }
-
-  clampAimToPlayableArc(rawX, rawY) {
-    return this.normalizeAimVector(rawX, rawY - 0.02);
-  }
-
-  getAutoLaunchAimFromDrag(dx, dy) {
-    const distance = Math.max(1, Math.hypot(dx, dy));
-    const dragDirX = dx / distance;
-    const dragDirY = dy / distance;
-    return this.clampAimToPlayableArc(dragDirX, dragDirY);
+    return this.normalizeAimVector(dx, dy);
   }
 
   normalizeAimVector(x, y) {
-    const safeY = Math.min(y, -0.25);
-    const length = Math.max(1, Math.hypot(x, safeY));
-    return { x: x / length, y: safeY / length };
+    const length = Math.max(1, Math.hypot(x, y));
+    return { x: x / length, y: y / length };
   }
 
   launchAutoThrowFromDrag() {
-    const autoDx = Math.abs(this.swipeDx) > 0.01 || Math.abs(this.swipeDy) > 0.01 ? this.swipeDx : this.lastDragDx;
-    const autoDy = Math.abs(this.swipeDx) > 0.01 || Math.abs(this.swipeDy) > 0.01 ? this.swipeDy : this.lastDragDy;
-    const aim = this.getAutoLaunchAimFromDrag(autoDx, autoDy);
-    const horizontalIntent = Phaser.Math.Clamp(Math.abs(autoDx) / Math.max(this.ballRadius * 1.8, 1), 0, 1);
-    const power = Phaser.Math.Linear(13.8, 17.6, horizontalIntent) * this.throwStrengthScale * this.strengthPower;
-    const vx = Phaser.Math.Clamp(aim.x * power, -10.0, 10.0);
-    const vy = Phaser.Math.Clamp(aim.y * power, -24.0, -8.6);
+    const autoDx = this.ball.x - this.dragStartX;
+    const autoDy = this.ball.y - this.dragStartY;
+    const releaseDx = Math.abs(this.releaseSwipeX) >= 1.5 ? this.releaseSwipeX : this.dragPointerDx;
+    const releaseDy = Math.abs(this.releaseSwipeY) >= 1.5 ? this.releaseSwipeY : this.dragPointerDy;
+    const aim = this.getLaunchAimFromDrag(releaseDx, releaseDy);
+    const horizontalIntent = Phaser.Math.Clamp(Math.abs(autoDx) / Math.max(this.ballRadius * 2.2, 1), 0, 1);
+    const isCompact = this.scale.width < 900 || this.scale.height > this.scale.width;
+    const power = Phaser.Math.Linear(
+      isCompact ? 20.5 : 17.0,
+      isCompact ? 25.5 : 21.0,
+      horizontalIntent
+    ) * this.throwStrengthScale * this.strengthPower;
+    const vx = Phaser.Math.Clamp(aim.x * power, -15.5, 15.5);
+    const vy = Phaser.Math.Clamp(aim.y * power, -43.0, -11.8);
     this.launchBall(vx, vy);
   }
 

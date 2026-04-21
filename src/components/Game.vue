@@ -60,6 +60,7 @@ const GAME_SECRET_KEY =
 const GAME_ICON_PATH = new URL("../assets/icons/nf_icon.png", import.meta.url).href;
 const GAME_URL = "https://fb.gg/play/1431508008453701";
 const GAME_SLUG = "net-flex";
+const GAME_APP_ID = GAME_URL.match(/fb\.gg\/play\/(\d+)/i)?.[1] || "";
 
 const maxLives = 5;
 const lives = ref(maxLives);
@@ -74,15 +75,16 @@ const successMessage = ref("Your session was created successfully.");
 const gameRoot = ref(null);
 let game = null;
 let pendingSuccessReset = null;
-const MIN_GAME_WIDTH = 320;
-const MIN_GAME_HEIGHT = 480;
+const LANDSCAPE_GAME_SIZE = { width: 1920, height: 1080 };
+const PORTRAIT_GAME_SIZE = { width: 1080, height: 1920 };
 
 const currentGameMeta = {
   gameId: GAME_ID,
   gamesecretkey: GAME_SECRET_KEY,
   game_icon_path: GAME_ICON_PATH,
   game_url: GAME_URL,
-  game_slug: GAME_SLUG
+  game_slug: GAME_SLUG,
+  game_app_id: GAME_APP_ID
 };
 
 if (typeof window !== "undefined") {
@@ -131,25 +133,49 @@ function handlePhoneKeydown(event) {
 }
 
 function getGameViewport() {
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-  const clampViewport = (w, h) => ({
-    width: Math.max(MIN_GAME_WIDTH, Math.floor(w)),
-    height: Math.max(MIN_GAME_HEIGHT, Math.floor(h))
-  });
+  const viewportSource = window.visualViewport || window;
+  const width = viewportSource.width || window.innerWidth;
+  const height = viewportSource.height || window.innerHeight;
+  return {
+    width: Math.max(1, Math.floor(width)),
+    height: Math.max(1, Math.floor(height))
+  };
+}
 
-  if (!isMobileTabletDevice()) {
-    return clampViewport(width, height);
-  }
-  return clampViewport(Math.min(width, height), Math.max(width, height));
+function getLogicalGameSize(viewport = getGameViewport()) {
+  return viewport.height > viewport.width ? PORTRAIT_GAME_SIZE : LANDSCAPE_GAME_SIZE;
+}
+
+function getRenderResolution() {
+  const deviceRatio = window.devicePixelRatio || 1;
+  return isMobileTabletDevice()
+    ? Math.min(Math.max(deviceRatio, 2), 3)
+    : deviceRatio;
+}
+
+function applyCanvasQuality() {
+  if (!game?.canvas) return;
+  game.canvas.style.display = "block";
+  game.canvas.style.imageRendering = "auto";
+  game.canvas.style.transform = "translateZ(0)";
+  game.canvas.style.backfaceVisibility = "hidden";
+  game.canvas.style.webkitFontSmoothing = "antialiased";
 }
 
 function createGame() {
   const viewport = getGameViewport();
+  const logicalGameSize = getLogicalGameSize(viewport);
   game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: gameRoot.value,
-    resolution: Math.min(window.devicePixelRatio || 1, 2),
+    width: logicalGameSize.width,
+    height: logicalGameSize.height,
+    resolution: getRenderResolution(),
+    render: {
+      roundPixels: true,
+      antialias: true,
+      antialiasGL: true,
+    },
     physics: {
       default: "matter",
       matter: {
@@ -157,23 +183,30 @@ function createGame() {
       }
     },
     scale: {
-      mode: isMobileTabletDevice() ? Phaser.Scale.FIT : Phaser.Scale.RESIZE,
+      mode: Phaser.Scale.FIT,
       autoCenter: Phaser.Scale.CENTER_BOTH,
-      width: viewport.width,
-      height: viewport.height
+      width: logicalGameSize.width,
+      height: logicalGameSize.height
     },
     scene: [MainScene],
     backgroundColor: "#000000",
   });
+  applyCanvasQuality();
 }
 
 function handleWindowResize() {
   if (!game) return;
   const viewport = getGameViewport();
   if (!Number.isFinite(viewport.width) || !Number.isFinite(viewport.height)) return;
-  if (viewport.width < MIN_GAME_WIDTH || viewport.height < MIN_GAME_HEIGHT) return;
-  game.scale.setGameSize(viewport.width, viewport.height);
+  const logicalGameSize = getLogicalGameSize(viewport);
+  const needsResize =
+    game.scale.gameSize.width !== logicalGameSize.width ||
+    game.scale.gameSize.height !== logicalGameSize.height;
+  if (needsResize) {
+    game.scale.resize(logicalGameSize.width, logicalGameSize.height);
+  }
   game.scale.refresh();
+  applyCanvasQuality();
 }
 
 function getMainScene() {
@@ -348,6 +381,7 @@ onMounted(() => {
   window.addEventListener("phaser:miss", handleMiss);
   window.addEventListener("phaser:gameover", handleGameOver);
   window.addEventListener("resize", handleWindowResize);
+  window.visualViewport?.addEventListener("resize", handleWindowResize);
 });
 
 
@@ -357,6 +391,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("phaser:miss", handleMiss);
   window.removeEventListener("phaser:gameover", handleGameOver);
   window.removeEventListener("resize", handleWindowResize);
+  window.visualViewport?.removeEventListener("resize", handleWindowResize);
   if (game) {
     game.destroy(true);
     game = null;
@@ -370,12 +405,30 @@ onBeforeUnmount(() => {
   position: relative;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
 }
 
 .game-root {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   overflow: hidden;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.game-root :deep(canvas) {
+  display: block;
+  margin: auto;
+  image-rendering: auto;
+  transform: translateZ(0);
+  backface-visibility: hidden;
 }
 
 .overlay {
