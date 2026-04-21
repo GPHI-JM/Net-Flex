@@ -1086,17 +1086,16 @@ export default class MainScene extends Phaser.Scene {
         .setDepth(303);
 
       let iconElement;
+      const iconYOffset = 0;
       if (GAME_IMAGE_ICON_KEYS.has(game.icon)) {
-        const iconMaxSize = isCompact
-          ? Math.min(cardWidth, cardHeight) * 0.9
-          : 300;
-        iconElement = this.add.image(itemCenterX, itemCenterY - 10, game.icon)
+        const iconMaxSize = Math.min(cardWidth, cardHeight) * (isCompact ? 0.9 : 0.8);
+        iconElement = this.add.image(itemCenterX, itemCenterY + iconYOffset, game.icon)
           .setOrigin(0.5)
           .setDepth(304);
         const iconScale = Math.min(iconMaxSize / iconElement.width, iconMaxSize / iconElement.height);
         iconElement.setScale(iconScale);
       } else {
-        iconElement = this.add.text(itemCenterX, itemCenterY - 20, game.icon, {
+        iconElement = this.add.text(itemCenterX, itemCenterY + iconYOffset, game.icon, {
           fontFamily: "Arial Black, Arial, sans-serif",
           fontSize: "18px",
           color: "#ffffff",
