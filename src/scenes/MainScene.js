@@ -162,12 +162,6 @@ export default class MainScene extends Phaser.Scene {
     this.shotSequence = 0;
     this.pendingGameOver = false;
     this.hoopCollisionsArmed = true;
-    this.onFBReady = null;
-    this.onFBNameUpdated = null;
-    this.namePollTimer = null;
-    this.fbNameRefreshInFlight = false;
-    this.fbInitAttemptedInScene = false;
-    this.webSdkNameTried = false;
 
     // Game selector UI
     this.games = [];
@@ -222,23 +216,6 @@ export default class MainScene extends Phaser.Scene {
 
   async launchGameEntry(entry) {
     if (!entry) return;
-
-    const appId = String(entry.appId || extractFbAppId(entry.url || ""));
-    const isInstant = typeof window !== "undefined" && typeof window.FBInstant !== "undefined";
-    const switchData = {
-      referrer: "game_switch",
-      from_game_slug: String(this.currentGameMeta?.game_slug ?? ""),
-      target_game_slug: String(entry.slug ?? ""),
-    };
-
-    if (isInstant && appId && typeof window.FBInstant.switchGameAsync === "function") {
-      try {
-        await window.FBInstant.switchGameAsync(appId, switchData);
-        return;
-      } catch (_) {
-        // If switching fails, keep the fallback web launch for non-Instant contexts.
-      }
-    }
 
     if (entry.url) {
       try {
@@ -555,116 +532,6 @@ export default class MainScene extends Phaser.Scene {
     const cachedName = localStorage.getItem("lastPlayerName");
     const name = cachedName && cachedName.trim() ? cachedName : this.getFallbackPlayerLabel();
     this.setPlayerName(name);
-  }
-
-
-  async tryResolvePlayerNameFromFB() {
-    if (this.fbNameRefreshInFlight) return;
-    this.fbNameRefreshInFlight = true;
-    try {
-      const fb = window.FBInstant;
-      if (!fb) return;
-
-      if (!this.fbInitAttemptedInScene) {
-        this.fbInitAttemptedInScene = true;
-        try {
-          if (typeof fb.initializeAsync === "function") {
-            await fb.initializeAsync();
-          }
-        } catch (_) {}
-        try {
-          if (typeof fb.setLoadingProgress === "function") {
-            fb.setLoadingProgress(100);
-          }
-        } catch (_) {}
-        try {
-          if (typeof fb.startGameAsync === "function") {
-            await fb.startGameAsync();
-          }
-        } catch (_) {}
-      }
-
-      const fbName = this.readFBInstantPlayerName();
-      let cleanName = "";
-      if (fbName) {
-        cleanName = fbName;
-      } else {
-        cleanName = await this.tryResolvePlayerNameFromWebSDK();
-      }
-      if (!cleanName) return;
-      try {
-        window.__fbPlayerName = cleanName;
-      } catch (_) {}
-      try {
-        localStorage.setItem("lastPlayerName", cleanName);
-      } catch (_) {}
-      this.setPlayerName(cleanName);
-    } finally {
-      this.fbNameRefreshInFlight = false;
-    }
-  }
-
-  async tryResolvePlayerNameFromWebSDK() {
-    if (this.webSdkNameTried) return "";
-    this.webSdkNameTried = true;
-    try {
-      const fbWeb = window.FB;
-      if (!fbWeb || typeof fbWeb.getLoginStatus !== "function" || typeof fbWeb.api !== "function") {
-        return "";
-      }
-      const loginStatus = await new Promise((resolve) => {
-        fbWeb.getLoginStatus((response) => resolve(response || null));
-      });
-      if (!loginStatus || loginStatus.status !== "connected") {
-        return "";
-      }
-      const me = await new Promise((resolve) => {
-        fbWeb.api("/me", { fields: "name" }, (response) => resolve(response || null));
-      });
-      const webName = me?.name;
-      if (webName && typeof webName === "string" && webName.trim()) {
-        return webName.trim();
-      }
-      return "";
-    } catch (_) {
-      return "";
-    }
-  }
-
-  readFBInstantPlayerName() {
-    try {
-      const value = window.FBInstant?.player?.getName?.();
-      if (value && typeof value === "string" && value.trim()) {
-        const clean = value.trim();
-        if (clean.toUpperCase() === "PLAYER" || clean.toUpperCase() === "GUEST") {
-          return "";
-        }
-        return clean;
-      }
-    } catch (_) {}
-    return "";
-  }
-
-  readFBInstantPlayerId() {
-    try {
-      const globalId = window.__fbPlayerId;
-      if (globalId && typeof globalId === "string" && globalId.trim()) {
-        return globalId.trim();
-      }
-    } catch (_) {}
-    try {
-      const value = window.FBInstant?.player?.getID?.();
-      if (value && typeof value === "string" && value.trim()) {
-        return value.trim();
-      }
-    } catch (_) {}
-    try {
-      const cachedId = localStorage.getItem("lastPlayerId");
-      if (cachedId && typeof cachedId === "string" && cachedId.trim()) {
-        return cachedId.trim();
-      }
-    } catch (_) {}
-    return "";
   }
 
   getFallbackPlayerLabel() {
@@ -1676,14 +1543,6 @@ export default class MainScene extends Phaser.Scene {
     this.closeGameModal();
     this.stopTempMusicLoop();
     this.input.off("pointerdown", this.handleFirstInteraction, this);
-    if (this.onFBReady) {
-      window.removeEventListener("fb:ready", this.onFBReady);
-      this.onFBReady = null;
-    }
-    if (this.onFBNameUpdated) {
-      window.removeEventListener("fb:name-updated", this.onFBNameUpdated);
-      this.onFBNameUpdated = null;
-    }
     if (this.bgMusic) {
       this.bgMusic.destroy();
       this.bgMusic = null;
@@ -1691,10 +1550,6 @@ export default class MainScene extends Phaser.Scene {
     if (this.shotResetTimer) {
       this.shotResetTimer.remove(false);
       this.shotResetTimer = null;
-    }
-    if (this.namePollTimer) {
-      this.namePollTimer.remove(false);
-      this.namePollTimer = null;
     }
   }
 }

@@ -48,7 +48,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import Phaser from "phaser";
 import MainScene from "../scenes/MainScene";
 import { normalizePhilippineMobileNumber, verifyPhoneWithAxios } from "../services/phoneVerification";
-import { initFB } from "../services/fbInit";
 
 const injectedGameMeta =
   typeof window !== "undefined" ? (window.__currentGameMeta || window.__gameMeta || {}) : {};
@@ -58,9 +57,7 @@ const GAME_SECRET_KEY =
   import.meta.env.VITE_GAME_SECRET_KEY ||
   "e4b7c9f1a2d34e8b9f6a1c7d0e5f2a3b4c8d9e7f6a1b2c3d4e5f6a7b8c9d0e1f";
 const GAME_ICON_PATH = new URL("../assets/icons/nf_icon.png", import.meta.url).href;
-const GAME_URL = "https://fb.gg/play/1431508008453701";
 const GAME_SLUG = "net-flex";
-const GAME_APP_ID = GAME_URL.match(/fb\.gg\/play\/(\d+)/i)?.[1] || "";
 
 const maxLives = 5;
 const lives = ref(maxLives);
@@ -82,9 +79,7 @@ const currentGameMeta = {
   gameId: GAME_ID,
   gamesecretkey: GAME_SECRET_KEY,
   game_icon_path: GAME_ICON_PATH,
-  game_url: GAME_URL,
-  game_slug: GAME_SLUG,
-  game_app_id: GAME_APP_ID
+  game_slug: GAME_SLUG
 };
 
 if (typeof window !== "undefined") {
@@ -351,33 +346,7 @@ async function verifyAndRestart() {
   }
 }
 
-function handleFbReady(event) {
-  const fbName = event?.detail?.playerName;
-  if (fbName) {
-    const scene = getMainScene();
-    if (scene && typeof scene.setPlayerName === "function") {
-      scene.setPlayerName(fbName);
-    }
-  }
-}
-
-function handleFbNameUpdated(event) {
-  const fbName = event?.detail?.playerName;
-  if (fbName) {
-    const scene = getMainScene();
-    if (scene && typeof scene.setPlayerName === "function") {
-      scene.setPlayerName(fbName);
-    }
-  }
-}
-
-
 onMounted(() => {
-  window.addEventListener("fb:ready", handleFbReady);
-  window.addEventListener("fb:name-updated", handleFbNameUpdated);
-
-  initFB().catch(() => {}); // kick off FBInstant init
-
   window.addEventListener("phaser:miss", handleMiss);
   window.addEventListener("phaser:gameover", handleGameOver);
   window.addEventListener("resize", handleWindowResize);
@@ -386,8 +355,6 @@ onMounted(() => {
 
 
 onBeforeUnmount(() => {
-  window.removeEventListener("fb:ready", handleFbReady);
-  window.removeEventListener("fb:name-updated", handleFbNameUpdated);
   window.removeEventListener("phaser:miss", handleMiss);
   window.removeEventListener("phaser:gameover", handleGameOver);
   window.removeEventListener("resize", handleWindowResize);
