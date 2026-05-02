@@ -3,9 +3,6 @@ import axios from "axios";
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_VERIFY_PHONE_ENDPOINT =
   "https://docking-635955947416.asia-east1.run.app/api/auth/game-login";
-const DEFAULT_GAME_SECRET_KEY =
-  "e4b7c9f1a2d34e8b9f6a1c7d0e5f2a3b4c8d9e7f6a1b2c3d4e5f6a7b8c9d0e1f";
-const DEFAULT_GAME_ID = "3";
 
 export function normalizePhilippineMobileNumber(phone) {
   const digits = String(phone ?? "").replace(/\D+/g, "");
@@ -48,22 +45,36 @@ function pickFirstNonEmpty(...values) {
   return "";
 }
 
+function getCurrentGameIdFromContext() {
+  if (typeof globalThis === "undefined") return "";
+
+  const meta = globalThis.__currentGameMeta || globalThis.__gameMeta || {};
+  return pickFirstNonEmpty(
+    meta.game_id,
+    meta.gameId,
+    meta.id,
+    import.meta.env.VITE_GAME_ID
+  );
+}
+
 function buildPayload(payload = {}) {
   const normalizedPhone = normalizePhilippineMobileNumber(payload.phone);
   if (!normalizedPhone) {
     throw new Error("Enter a valid Philippine mobile number.");
   }
 
+  const resolvedGameId = pickFirstNonEmpty(
+    payload.game_id,
+    getCurrentGameIdFromContext()
+  );
+  const parsedGameId = Number(resolvedGameId);
+
   return {
-    game_id: pickFirstNonEmpty(payload.game_id, import.meta.env.VITE_GAME_ID, DEFAULT_GAME_ID),
-    gamesecretkey: pickFirstNonEmpty(
-      payload.gamesecretkey,
-      import.meta.env.VITE_GAME_SECRET_KEY,
-      DEFAULT_GAME_SECRET_KEY
-    ),
+    game_id: Number.isFinite(parsedGameId) ? parsedGameId : resolvedGameId,
     phone: normalizedPhone,
     game_icon_path: pickFirstNonEmpty(payload.game_icon_path, import.meta.env.VITE_GAME_ICON_PATH),
-    points: String(payload.points ?? 0)
+    points: String(payload.points ?? 0),
+    is_verified: 1
   };
 }
 

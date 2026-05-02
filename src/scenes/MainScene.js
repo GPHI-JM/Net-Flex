@@ -1,4 +1,9 @@
 import Phaser from "phaser";
+import {
+  fetchGamesCatalog,
+  fetchTopScorers,
+  normalizeLeaderboardRecord
+} from "../services/gameApi.js";
 
 const bgUrl = new URL("../assets/basketball_court.png", import.meta.url).href;
 const imgBall = new URL("../assets/bola.png", import.meta.url).href;
@@ -39,28 +44,57 @@ const NET_SCORE_FRAMES = [
 ];
 
 const DEFAULT_GAMES = [
-  { id: 1, name: "Power Hammer", icon: "phIcon", url: "https://fb.gg/play/4166337263499439" },
-  { id: 2, name: "Bingo Fiesta", icon: "bfIcon", url: "https://fb.gg/play/1463506198613599" },
-  { id: 3, name: "Net Flex", icon: "nfIcon", url: "https://fb.gg/play/1431508008453701" },
-  { id: 4, name: "Tek Hen", icon: "tekhen_icon", url: "https://fb.gg/play/2136783867072234" },
+  { id: 1, gameId: 1, name: "Power Hammer", textureKey: "phIcon", url: "https://fb.gg/play/4166337263499439" },
+  { id: 2, gameId: 2, name: "Bingo Fiesta", textureKey: "bfIcon", url: "https://fb.gg/play/1463506198613599" },
+  { id: 3, gameId: 3, name: "Net Flex", textureKey: "nfIcon", url: "https://fb.gg/play/1431508008453701" },
+  { id: 4, gameId: 4, name: "Tek Hen", textureKey: "tekhen_icon", url: "https://fb.gg/play/2136783867072234" },
 ];
 
-const GAME_IMAGE_ICON_KEYS = new Set(["nfIcon", "tekhen_icon", "phIcon", "bfIcon"]);
+const UI_FONT_STACK = '"Trebuchet MS", "Segoe UI", "Helvetica Neue", Arial, sans-serif';
 
 function normalizeGameItem(game, index) {
   if (!game || typeof game !== "object") return null;
 
   const fallbackId = index + 1;
   const fallbackName = `Game ${fallbackId}`;
+  const gameId = game.gameId ?? game.game_id ?? game.id ?? fallbackId;
 
   return {
-    id: game.id ?? game.gameId ?? game.game_id ?? fallbackId,
+    id: gameId,
+    gameId,
     name: game.name ?? game.gameName ?? game.game_name ?? game.title ?? fallbackName,
     slug: game.slug ?? game.gameSlug ?? game.game_slug ?? game.key ?? "",
-    icon: game.icon ?? game.iconKey ?? game.icon_key ?? game.code ?? String(fallbackId).padStart(2, "0"),
-    url: game.url ?? game.launchUrl ?? game.launch_url ?? game.gameUrl ?? "",
-    appId: game.appId ?? game.app_id ?? extractFbAppId(game.url ?? game.launchUrl ?? game.launch_url ?? game.gameUrl ?? ""),
+    description: game.description ?? game.gameDescription ?? game.game_description ?? "",
+    imageUrl: game.imageUrl ?? game.image_url ?? game.iconUrl ?? game.icon_url ?? game.icon ?? "",
+    image_url: game.image_url ?? game.imageUrl ?? game.iconUrl ?? game.icon_url ?? game.icon ?? "",
+    textureKey: game.textureKey ?? game.iconKey ?? game.icon_key ?? game.icon ?? "",
+    url: game.url ?? game.launchUrl ?? game.launch_url ?? game.gameUrl ?? game.game_url ?? "",
+    game_url: game.game_url ?? game.gameUrl ?? game.url ?? game.launch_url ?? game.launchUrl ?? "",
+    href: game.href ?? game.game_url ?? game.gameUrl ?? game.url ?? game.launch_url ?? game.launchUrl ?? "",
+    appId: game.appId ?? game.app_id ?? extractFbAppId(game.url ?? game.launchUrl ?? game.launch_url ?? game.gameUrl ?? game.game_url ?? ""),
   };
+}
+
+function isCurrentGameMatch(game, meta = {}) {
+  if (!game) return false;
+  const currentGameId = String(meta?.gameId ?? meta?.game_id ?? "").trim();
+  const currentGameSlug = String(meta?.game_slug ?? meta?.gameSlug ?? "").trim().toLowerCase();
+  const currentGameName = String(meta?.game_name ?? meta?.gameName ?? "").trim().toLowerCase();
+  const currentGameUrl = String(meta?.game_url ?? meta?.gameUrl ?? "").trim();
+  const currentAppId = String(meta?.game_app_id ?? meta?.gameAppId ?? meta?.appId ?? "").trim();
+
+  const gameId = String(game.gameId ?? game.game_id ?? game.id ?? "").trim();
+  const slug = String(game.slug ?? game.game_slug ?? "").trim().toLowerCase();
+  const name = String(game.name ?? game.game_name ?? "").trim().toLowerCase();
+  const url = String(game.game_url ?? game.gameUrl ?? game.url ?? game.launch_url ?? game.launchUrl ?? "").trim();
+  const appId = String(game.appId ?? game.app_id ?? extractFbAppId(url)).trim();
+
+  if (currentGameId && gameId && gameId === currentGameId) return true;
+  if (currentGameSlug && slug && slug === currentGameSlug) return true;
+  if (currentGameName && name && name === currentGameName) return true;
+  if (currentGameUrl && url && url === currentGameUrl) return true;
+  if (currentAppId && appId && appId === currentAppId) return true;
+  return false;
 }
 
 function extractFbAppId(url) {
@@ -72,6 +106,25 @@ function extractFbAppId(url) {
 function getCurrentGameMeta() {
   if (typeof globalThis === "undefined") return null;
   return globalThis.__currentGameMeta || globalThis.__gameMeta || null;
+}
+
+function getCachedGameCatalog() {
+  if (typeof globalThis === "undefined") return [];
+  return globalThis.__gamesCatalog || [];
+}
+
+function getCachedLeaderboardEntries() {
+  if (typeof globalThis === "undefined") return [];
+  return globalThis.__leaderboardEntries || [];
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 const CFG = {
@@ -171,6 +224,18 @@ export default class MainScene extends Phaser.Scene {
     this.gameModal = null;
     this.gameModalPage = 0;
     this.currentGameMeta = getCurrentGameMeta();
+    this.leaderboardEntries = [];
+    this.leaderboardLoading = false;
+    this.leaderboardError = "";
+    this.gameCatalogLoading = false;
+    this.gameTextureLoadKeys = new Set();
+    this.gameTextureLoadInProgress = false;
+    this.gameTextureLoadPromise = null;
+    this.leaderboardPanel = null;
+    this.leaderboardPanelShadow = null;
+    this.leaderboardTitleText = null;
+    this.leaderboardSubtitleText = null;
+    this.leaderboardRows = [];
     this.setGames(DEFAULT_GAMES);
   }
 
@@ -181,32 +246,19 @@ export default class MainScene extends Phaser.Scene {
       .filter(Boolean);
 
     const meta = this.currentGameMeta || getCurrentGameMeta();
-    const currentGameId = String(meta?.gameId ?? meta?.game_id ?? "");
-    const currentGameSlug = String(meta?.game_slug ?? meta?.gameSlug ?? "");
-    const currentGameUrl = String(meta?.game_url ?? meta?.gameUrl ?? "");
-    const currentGameAppId = String(meta?.game_app_id ?? meta?.gameAppId ?? meta?.appId ?? extractFbAppId(currentGameUrl));
 
-    this.games = normalizedGames.length > 0
-      ? normalizedGames.filter((game) => {
-        if (currentGameId && String(game.id) === currentGameId) return false;
-        if (currentGameSlug && String(game.slug) === currentGameSlug) return false;
-        if (currentGameUrl && String(game.url) === currentGameUrl) return false;
-        if (currentGameAppId && String(game.appId) === currentGameAppId) return false;
-        return true;
-      })
-      : DEFAULT_GAMES.map((game, index) => normalizeGameItem(game, index)).filter((game) => {
-        if (currentGameId && String(game.id) === currentGameId) return false;
-        if (currentGameSlug && String(game.slug) === currentGameSlug) return false;
-        if (currentGameUrl && String(game.url) === currentGameUrl) return false;
-        if (currentGameAppId && String(game.appId) === currentGameAppId) return false;
-        return true;
-      });
+    const fallbackGames = DEFAULT_GAMES.map((game, index) => normalizeGameItem(game, index)).filter(Boolean);
+    const sourceGames = normalizedGames.length > 0 ? normalizedGames : fallbackGames;
+
+    this.games = sourceGames.filter((game) => !isCurrentGameMatch(game, meta));
 
     if (!this.games.some((game) => game.id === this.selectedGameId)) {
       this.selectedGameId = this.games[0]?.id ?? null;
     }
 
     this.gameModalPage = 0;
+
+    this.preloadRemoteGameTextures(this.games).catch(() => {});
 
     if (wasModalOpen) {
       this.closeGameModal();
@@ -217,15 +269,16 @@ export default class MainScene extends Phaser.Scene {
   async launchGameEntry(entry) {
     if (!entry) return;
 
-    if (entry.url) {
+    const targetUrl = entry.href || entry.game_url || entry.url || "";
+    if (targetUrl) {
       try {
         if (window.top && window.top !== window) {
-          window.top.location.href = entry.url;
+          window.top.location.href = targetUrl;
         } else {
-          window.location.href = entry.url;
+          window.location.href = targetUrl;
         }
       } catch (_) {
-        window.location.href = entry.url;
+        window.location.href = targetUrl;
       }
     }
   }
@@ -300,14 +353,14 @@ export default class MainScene extends Phaser.Scene {
     this.input.setDraggable(this.ball);
 
     this.scoreText = this.add.text(0, 0, "Score: 0", {
-      fontFamily: "Arial Black, Arial, sans-serif",
-      fontSize: "42px",
+      fontFamily: UI_FONT_STACK,
+      fontSize: "32px",
       color: "#ffffff",
       stroke: "#000000",
-      strokeThickness: 6
+      strokeThickness: 5
     });
     this.lifeText = this.add.text(0, 0, `${this.life}/${this.lifeMax}`, {
-      fontFamily: "Arial Black, Arial, sans-serif",
+      fontFamily: UI_FONT_STACK,
       fontSize: "24px",
       color: "#f7d046",
       stroke: "#000000",
@@ -316,7 +369,7 @@ export default class MainScene extends Phaser.Scene {
     this.lifeBarBg = this.add.rectangle(1, 0, 100, 10, 0x2d2d2d, 1).setOrigin(0, 0.5);
     this.lifeBarFill = this.add.rectangle(0, 0, 100, 10, 0xffd400, 1).setOrigin(0, 0.5);
     this.playerNameText = this.add.text(0, 10, "PLAYER", {
-      fontFamily: "Arial Black, Arial, sans-serif",
+      fontFamily: UI_FONT_STACK,
       fontSize: "38px",
       color: "#f4f4f4",
       stroke: "#000000",
@@ -346,7 +399,9 @@ export default class MainScene extends Phaser.Scene {
     }
 
     this.createGameSlotUI();
+    this.createLeaderboardUI();
     this.applyResponsiveLayout(this.scale.width, this.scale.height);
+    this.loadGameData();
     this.setAudioEnabled(true, { startMusic: false });
     this.resolvePlayerName();
     this.resetBallToStart();
@@ -398,7 +453,7 @@ export default class MainScene extends Phaser.Scene {
       .setDepth(201);
     const title = this.add
       .text(panelX, titleY, "Settings", {
-        fontFamily: "Arial Black, Arial, sans-serif",
+        fontFamily: UI_FONT_STACK,
         fontSize: `${titleFontPx}px`,
         color: "#ffffff"
       })
@@ -407,7 +462,7 @@ export default class MainScene extends Phaser.Scene {
 
     const musicLabel = this.add
       .text(leftColX, row1Y, "Music", {
-        fontFamily: "Arial Black, Arial, sans-serif",
+        fontFamily: UI_FONT_STACK,
         fontSize: `${labelFontPx}px`,
         color: "#ffffff"
       })
@@ -415,7 +470,7 @@ export default class MainScene extends Phaser.Scene {
       .setDepth(202);
     const musicValue = this.add
       .text(leftColX, row1Y + valueGap, this.audioEnabled ? "ON" : "OFF", {
-        fontFamily: "Arial Black, Arial, sans-serif",
+        fontFamily: UI_FONT_STACK,
         fontSize: `${valueFontPx}px`,
         color: "#ffd84d"
       })
@@ -472,6 +527,255 @@ export default class MainScene extends Phaser.Scene {
   setCurrentGameMeta(meta) {
     this.currentGameMeta = meta || null;
     this.setGames(this.games);
+    this.refreshLeaderboardForCurrentGame();
+  }
+
+  preloadRemoteGameTextures(gameList = []) {
+    if (!this.sys?.game?.isBooted) return Promise.resolve();
+    const loadTargets = [];
+
+    for (const game of Array.isArray(gameList) ? gameList : []) {
+      const imageUrl = game?.imageUrl || game?.image_url;
+      const textureKey = this.getGameTextureKey(game);
+      if (!imageUrl || !textureKey || this.textures.exists(textureKey) || this.gameTextureLoadKeys.has(textureKey)) {
+        continue;
+      }
+
+      this.gameTextureLoadKeys.add(textureKey);
+      loadTargets.push({ key: textureKey, url: imageUrl });
+    }
+
+    if (!loadTargets.length) return Promise.resolve();
+    if (this.gameTextureLoadPromise) return this.gameTextureLoadPromise;
+
+    this.gameTextureLoadInProgress = true;
+    this.gameTextureLoadPromise = Promise.all(
+      loadTargets.map(({ key, url }) => this.loadImageTexture(key, url))
+    )
+      .catch(() => {})
+      .finally(() => {
+        this.gameTextureLoadInProgress = false;
+        this.gameTextureLoadPromise = null;
+      });
+
+    return this.gameTextureLoadPromise;
+  }
+
+  loadImageTexture(textureKey, url) {
+    return new Promise((resolve) => {
+      const image = new Image();
+      image.crossOrigin = "anonymous";
+      image.referrerPolicy = "no-referrer";
+      image.decoding = "async";
+      image.onload = () => {
+        try {
+          if (typeof image.decode === "function") {
+            image.decode().catch(() => {}).finally(() => {
+              if (!this.textures.exists(textureKey)) {
+                this.textures.addImage(textureKey, image);
+              }
+              resolve(true);
+            });
+            return;
+          }
+        } catch (_) {}
+
+        if (!this.textures.exists(textureKey)) {
+          this.textures.addImage(textureKey, image);
+        }
+        resolve(true);
+      };
+      image.onerror = () => {
+        this.gameTextureLoadKeys.delete(textureKey);
+        resolve(false);
+      };
+      image.src = url;
+    });
+  }
+
+  getGameTextureKey(game) {
+    if (!game) return "";
+    if (game.textureKey) return game.textureKey;
+    if (game.imageUrl) {
+      const rawId = String(game.gameId ?? game.id ?? game.slug ?? game.name ?? "").replace(/[^a-z0-9_-]/gi, "-");
+      return `game-image-${rawId || "item"}`;
+    }
+    return "";
+  }
+
+  getGameLabelShort(game) {
+    const source = String(game?.name || "Game").trim();
+    const words = source.split(/\s+/).filter(Boolean).slice(0, 2);
+    const initials = words.map((word) => word.charAt(0).toUpperCase()).join("");
+    return initials || source.slice(0, 2).toUpperCase();
+  }
+
+  createLeaderboardUI() {
+    this.leaderboardPanelShadow = this.add.rectangle(0, 0, 10, 10, 0x00ff88, 0.12).setDepth(22);
+    this.leaderboardPanel = this.add.rectangle(0, 0, 10, 10, 0x111111, 0.88).setDepth(23);
+    this.leaderboardTitleText = this.add.text(0, 0, "LEADERBOARD", {
+      fontFamily: UI_FONT_STACK,
+      fontSize: "18px",
+      color: "#f8f8f8"
+    }).setOrigin(0.5, 0).setDepth(24);
+    this.leaderboardSubtitleText = this.add.text(0, 0, "Top 3 high scorers", {
+      fontFamily: UI_FONT_STACK,
+      fontSize: "12px",
+      color: "#ffd447"
+    }).setOrigin(0.5, 0).setDepth(24);
+
+    this.leaderboardRows = Array.from({ length: 3 }, (_, index) => {
+      const rowBg = this.add.rectangle(0, 0, 10, 10, 0x161616, 0.95).setDepth(24);
+      const rankBadge = this.add.circle(0, 0, 10, index === 0 ? 0x00ff88 : 0xffd447, 1).setDepth(25);
+      const rankText = this.add.text(0, 0, String(index + 1), {
+        fontFamily: UI_FONT_STACK,
+        fontSize: "12px",
+        color: "#111111"
+      }).setOrigin(0.5).setDepth(26);
+      const nameText = this.add.text(0, 0, "--", {
+        fontFamily: UI_FONT_STACK,
+        fontSize: "13px",
+        color: "#ffffff"
+      }).setOrigin(0, 0.5).setDepth(26);
+      const scoreText = this.add.text(0, 0, "0", {
+        fontFamily: UI_FONT_STACK,
+        fontSize: "11px",
+        color: "#ffd447"
+      }).setOrigin(1, 0.5).setDepth(26);
+
+      return { rowBg, rankBadge, rankText, nameText, scoreText };
+    });
+  }
+
+  setLeaderboardEntries(entries = []) {
+    const normalizedEntries = (Array.isArray(entries) ? entries : [])
+      .map((entry, index) => {
+        const normalized = normalizeLeaderboardRecord(entry, index);
+        if (!normalized) return null;
+        return {
+          ...normalized,
+          rank: normalized.rank ?? index + 1
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 3);
+
+    this.leaderboardEntries = normalizedEntries;
+    this.leaderboardError = "";
+    this.leaderboardLoading = false;
+    this.renderLeaderboard();
+  }
+
+  refreshLeaderboardForCurrentGame() {
+    const cachedEntries = getCachedLeaderboardEntries();
+    const currentGameId = this.currentGameMeta?.game_id ?? this.currentGameMeta?.gameId;
+
+    if (Array.isArray(cachedEntries) && cachedEntries.length) {
+      this.setLeaderboardEntries(cachedEntries);
+      return;
+    }
+
+    if (currentGameId) {
+      this.loadLeaderboardForCurrentGame(currentGameId);
+    }
+  }
+
+  async loadLeaderboardForCurrentGame(gameId) {
+    if (!gameId) return;
+    this.leaderboardLoading = true;
+    this.renderLeaderboard();
+    try {
+      const leaderboard = await fetchTopScorers(gameId);
+      this.setLeaderboardEntries(leaderboard.entries);
+    } catch (error) {
+      this.leaderboardLoading = false;
+      this.leaderboardError = "Unable to load leaderboard.";
+      this.renderLeaderboard();
+    }
+  }
+
+  async loadGameData() {
+    const cachedGames = getCachedGameCatalog();
+    if (Array.isArray(cachedGames) && cachedGames.length) {
+      this.setGames(cachedGames);
+    }
+
+    const currentGameId = this.currentGameMeta?.game_id ?? this.currentGameMeta?.gameId;
+    if (currentGameId) {
+      const cachedLeaderboard = getCachedLeaderboardEntries();
+      if (Array.isArray(cachedLeaderboard) && cachedLeaderboard.length) {
+        this.setLeaderboardEntries(cachedLeaderboard);
+      } else {
+        this.loadLeaderboardForCurrentGame(currentGameId);
+      }
+    }
+
+    if (Array.isArray(cachedGames) && cachedGames.length) return;
+
+    this.gameCatalogLoading = true;
+    try {
+      const catalog = await fetchGamesCatalog();
+      this.gameCatalogLoading = false;
+      this.setGames(catalog.games);
+    } catch (error) {
+      this.gameCatalogLoading = false;
+    }
+  }
+
+  renderLeaderboard() {
+    if (!this.leaderboardPanel || !this.leaderboardTitleText || !this.leaderboardSubtitleText) return;
+
+    const width = this.scale.width;
+    const height = this.scale.height;
+    const isPortrait = height >= width;
+    const isMobile = width < 900;
+    const isCompact = isMobile || isPortrait;
+    const anchorBounds = isCompact ? this.rightPanel.getBounds() : this.leftPanel.getBounds();
+    const compactAnchorBounds = isCompact ? this.leftPanel.getBounds() : anchorBounds;
+    const panelWidth = isCompact
+      ? Phaser.Math.Clamp(compactAnchorBounds.width * 0.88, 220, 300)
+      : Phaser.Math.Clamp(anchorBounds.width * 1.02, 300, 420);
+    const rowHeight = isCompact ? 28 : 30;
+    const panelPadding = isCompact ? 10 : 12;
+    const rowGap = isCompact ? 6 : 8;
+    const titleHeight = isCompact ? 18 : 18;
+    const subtitleHeight = isCompact ? 14 : 16;
+    const panelHeight = panelPadding * 2 + titleHeight + subtitleHeight + (rowHeight * 3) + (rowGap * 2) + 6;
+    const gap = isCompact ? 8 : 16;
+    const maxBottom = height - panelHeight / 2 - 10;
+    const rawX = isCompact
+      ? compactAnchorBounds.x + panelWidth / 2 + 8
+      : anchorBounds.centerX;
+    const rawY = (isCompact ? this.rightPanel.getBounds() : anchorBounds).bottom + gap + panelHeight / 2;
+    const panelX = Phaser.Math.Clamp(rawX, panelWidth / 2 + 10, width - panelWidth / 2 - 10);
+    const panelY = Phaser.Math.Clamp(rawY, panelHeight / 2 + 10, maxBottom);
+    const rowLeft = panelX - panelWidth / 2 + panelPadding;
+    const rowTop = panelY - panelHeight / 2 + panelPadding + titleHeight + subtitleHeight + 8;
+
+    this.leaderboardPanelShadow
+      .setPosition(panelX + 5, panelY + 6)
+      .setSize(panelWidth, panelHeight);
+    this.leaderboardPanel
+      .setPosition(panelX, panelY)
+      .setSize(panelWidth, panelHeight);
+    this.leaderboardTitleText.setPosition(panelX, panelY - panelHeight / 2 + panelPadding - 1);
+    this.leaderboardSubtitleText.setPosition(panelX, panelY - panelHeight / 2 + panelPadding + 18);
+
+    const data = this.leaderboardEntries.length
+      ? this.leaderboardEntries
+      : (this.leaderboardLoading
+        ? Array.from({ length: 3 }, (_, index) => ({ rank: index + 1, name: "Loading...", score: 0 }))
+        : Array.from({ length: 3 }, (_, index) => ({ rank: index + 1, name: "No score yet", score: 0 })));
+
+    this.leaderboardRows.forEach((row, index) => {
+      const entry = data[index] || { rank: index + 1, name: "--", score: 0 };
+      const rowY = rowTop + index * (rowHeight + rowGap) + rowHeight / 2;
+      row.rowBg.setPosition(panelX, rowY).setSize(panelWidth - panelPadding * 2, rowHeight);
+      row.rankBadge.setPosition(rowLeft + 13, rowY).setRadius(isCompact ? 11 : 10);
+      row.rankText.setPosition(rowLeft + 13, rowY + 1).setText(String(entry.rank ?? index + 1));
+      row.nameText.setPosition(rowLeft + 32, rowY).setText(String(entry.name || "--"));
+      row.scoreText.setPosition(panelX + panelWidth / 2 - panelPadding - 8, rowY).setText(String(entry.score ?? 0));
+    });
   }
 
   // Temporary background music loop (replace with real track later).
@@ -746,6 +1050,7 @@ export default class MainScene extends Phaser.Scene {
 
     this.rebuildHoopBodies();
     this.updateGameSlotUILayout(width, height);
+    this.renderLeaderboard();
     this.drawDebugOverlay();
   }
 
@@ -849,7 +1154,7 @@ export default class MainScene extends Phaser.Scene {
           yoyo: true,
           onComplete: () => {
             this.gameSelectButton.setAlpha(1);
-            this.showGameModal(); // open modal only on click
+            window.dispatchEvent(new CustomEvent("ui:open-game-modal"));
           }
         });
       }
@@ -857,7 +1162,7 @@ export default class MainScene extends Phaser.Scene {
   }
 
 
-  showGameModal() {
+  async showGameModal() {
     if (this.gameModal) {
       this.closeGameModal();
       return;
@@ -866,39 +1171,39 @@ export default class MainScene extends Phaser.Scene {
     const width = this.scale.width;
     const height = this.scale.height;
     const isCompact = width < 900 || height > width;
-    const modalWidth = isCompact ? Math.min(width * 0.97, 620) : Math.min(600, width * 0.5);
+    const modalWidth = isCompact ? Math.min(width * 0.96, 640) : Math.min(640, width * 0.52);
     const columns = 2;
-    const cardGap = isCompact ? 12 : 20;
-    const panelPaddingX = isCompact ? 18 : 20;
-    const panelPaddingTop = isCompact ? 82 : 76;
-    const panelPaddingBottom = isCompact ? 60 : 58;
-    const minCardHeight = isCompact ? 190 : 140;
+    const cardGap = isCompact ? 12 : 18;
+    const panelPaddingX = isCompact ? 18 : 22;
+    const panelPaddingTop = isCompact ? 84 : 78;
+    const panelPaddingBottom = isCompact ? 62 : 60;
+    const minCardHeight = isCompact ? 176 : 150;
     const modalHeight = isCompact
       ? Math.min(
-        panelPaddingTop + panelPaddingBottom + minCardHeight * 2 + cardGap + 24,
+        panelPaddingTop + panelPaddingBottom + minCardHeight * 2 + cardGap + 30,
         height * 0.8
       )
-      : height * 0.7;
+      : Math.min(height * 0.74, 760);
     const panelX = width / 2;
     const panelY = height / 2;
     const panelShadow = this.add
-      .rectangle(panelX + 8, panelY + 12, modalWidth, modalHeight, 0x00ff88, 0.14)
+      .rectangle(panelX + 8, panelY + 12, modalWidth, modalHeight, 0x00ff88, 0.06)
       .setDepth(300);
 
     const modalBg = this.add
-      .rectangle(width / 2, height / 2, width, height, 0x000000, 0.5)
+      .rectangle(width / 2, height / 2, width, height, 0x000000, 0.18)
       .setInteractive()
       .setDepth(301);
 
     const panel = this.add
-      .rectangle(panelX, panelY, modalWidth, modalHeight, 0x111111, 0.95)
-      .setStrokeStyle(2, 0xffd447, 0.22)
+      .rectangle(panelX, panelY, modalWidth, modalHeight, 0x111111, 0.18)
+      .setStrokeStyle(2, 0xffd447, 0.34)
       .setDepth(302);
 
     const titleY = panelY - modalHeight / 2 + 36;
     const title = this.add
       .text(panelX, titleY, "CHOOSE GAME", {
-        fontFamily: "Arial Black, Arial, sans-serif",
+        fontFamily: UI_FONT_STACK,
         fontSize: isCompact ? "26px" : "24px",
         color: "#00ff88",
         align: "center"
@@ -914,6 +1219,7 @@ export default class MainScene extends Phaser.Scene {
     this.gameModalPage = Phaser.Math.Clamp(this.gameModalPage, 0, totalPages - 1);
     const pageStart = this.gameModalPage * pageSize;
     const visibleGames = this.games.slice(pageStart, pageStart + pageSize);
+
     const rowCount = Math.max(1, Math.ceil(visibleGames.length / columns));
     const rawCardHeight = (availableGridHeight - cardGap * Math.max(0, rowCount - 1)) / rowCount;
     const cardHeight = isCompact
@@ -922,6 +1228,16 @@ export default class MainScene extends Phaser.Scene {
     const gridTop = panelY - modalHeight / 2 + panelPaddingTop;
     const gridLeft = panelX - modalWidth / 2 + panelPaddingX;
     const gameItems = [];
+
+    if (!visibleGames.length) {
+      const emptyState = this.add.text(panelX, panelY, "No other games available", {
+        fontFamily: UI_FONT_STACK,
+        fontSize: isCompact ? "16px" : "18px",
+        color: "#ffffff",
+        align: "center"
+      }).setOrigin(0.5).setDepth(304);
+      gameItems.push(emptyState);
+    }
 
     for (let i = 0; i < visibleGames.length; i++) {
       const game = visibleGames[i];
@@ -948,33 +1264,71 @@ export default class MainScene extends Phaser.Scene {
         .setDepth(302);
 
       const itemBg = this.add
-        .rectangle(itemCenterX, itemCenterY, cardWidth, cardHeight, 0x161616, 0.92)
-        .setStrokeStyle(2, shadowColor, isSelected ? 0.55 : 0.36)
+        .rectangle(itemCenterX, itemCenterY, cardWidth, cardHeight, 0x111111, 0.16)
+        .setStrokeStyle(2, shadowColor, isSelected ? 0.78 : 0.52)
         .setDepth(303);
 
-      let iconElement;
-      const iconYOffset = 0;
-      if (GAME_IMAGE_ICON_KEYS.has(game.icon)) {
-        const iconMaxSize = Math.min(cardWidth, cardHeight) * (isCompact ? 0.9 : 0.8);
-        iconElement = this.add.image(itemCenterX, itemCenterY + iconYOffset, game.icon)
-          .setOrigin(0.5)
-          .setDepth(304);
-        const iconScale = Math.min(iconMaxSize / iconElement.width, iconMaxSize / iconElement.height);
-        iconElement.setScale(iconScale);
-      } else {
-        iconElement = this.add.text(itemCenterX, itemCenterY + iconYOffset, game.icon, {
-          fontFamily: "Arial Black, Arial, sans-serif",
-          fontSize: "18px",
-          color: "#ffffff",
-          align: "center"
-        }).setOrigin(0.5).setDepth(304);
+      const imageUrl = game.imageUrl || game.image_url || "";
+      const iconMaxSize = Math.min(cardWidth, cardHeight) * (isCompact ? 0.82 : 0.76);
+      const iconCenterY = itemY + cardHeight * 0.34;
+      const iconFallback = this.add.text(itemCenterX, iconCenterY, this.getGameLabelShort(game), {
+        fontFamily: UI_FONT_STACK,
+        fontSize: isCompact ? "22px" : "20px",
+        color: "#ffffff",
+        align: "center"
+      }).setOrigin(0.5).setDepth(304);
+
+      let iconElement = iconFallback;
+      if (imageUrl) {
+        const iconDom = this.add.dom(itemCenterX, iconCenterY);
+        iconDom.createFromHTML(`
+          <a href="${escapeHtml(imageUrl)}" target="_blank" rel="noreferrer noopener" style="display:block; line-height:0; pointer-events:none;">
+            <img
+              src="${escapeHtml(imageUrl)}"
+              alt="${escapeHtml(game.name || "Game")}"
+              style="
+                width: ${Math.round(iconMaxSize)}px;
+                height: ${Math.round(iconMaxSize)}px;
+                object-fit: contain;
+                display: block;
+                pointer-events: none;
+                user-select: none;
+                -webkit-user-drag: none;
+                filter: drop-shadow(0 8px 16px rgba(0,0,0,0.22));
+              "
+            />
+          </a>
+        `);
+        iconDom.setOrigin(0.5, 0.5);
+        iconDom.setDepth(304);
+        iconDom.setAlpha(1);
+        const iconNode = iconDom.node;
+        const imgNode = iconNode?.querySelector?.("img");
+        if (imgNode && typeof imgNode.addEventListener === "function") {
+          imgNode.addEventListener("load", () => {
+            iconFallback.setVisible(false);
+          }, { once: true });
+          imgNode.addEventListener("error", () => {
+            iconDom.destroy();
+          }, { once: true });
+        }
+        iconElement = iconDom;
       }
 
-      
+      const nameLabel = this.add.text(itemCenterX, itemY + cardHeight * 0.79, game.name, {
+        fontFamily: UI_FONT_STACK,
+        fontSize: isCompact ? "15px" : "14px",
+        color: "#ffffff",
+        align: "center"
+      }).setOrigin(0.5).setDepth(304);
 
-      const itemContainer = this.add.container(0, 0);
-      itemContainer.add([itemShadow, itemBg, iconElement]);
-      itemContainer.setDepth(304);
+      const gameHref = game.href || game.game_url || game.url || "";
+      const subtitleLabel = this.add.text(itemCenterX, itemY + cardHeight * 0.92, gameHref ? "Tap to open" : "Coming soon", {
+        fontFamily: UI_FONT_STACK,
+        fontSize: isCompact ? "11px" : "10px",
+        color: gameHref ? "#ffd447" : "#8b8b8b",
+        align: "center"
+      }).setOrigin(0.5).setDepth(304);
 
       const hitTarget = this.add
         .rectangle(itemCenterX, itemCenterY, cardWidth, cardHeight, 0xffffff, 0.001)
@@ -1007,7 +1361,7 @@ export default class MainScene extends Phaser.Scene {
         itemBg.setStrokeStyle(2, shadowColor, isSelected ? 0.55 : 0.36);
       });
 
-      gameItems.push(itemContainer, hitTarget);
+      gameItems.push(itemShadow, itemBg, iconFallback, iconElement, nameLabel, subtitleLabel, hitTarget);
     }
 
     const navY = panelY + modalHeight / 2 - 28;
@@ -1018,7 +1372,7 @@ export default class MainScene extends Phaser.Scene {
     if (totalPages > 1) {
       pageLabel = this.add
         .text(panelX, navY, `${this.gameModalPage + 1}/${totalPages}`, {
-          fontFamily: "Arial Black, Arial, sans-serif",
+          fontFamily: UI_FONT_STACK,
           fontSize: "16px",
           color: "#ffffff",
           align: "center"
@@ -1028,7 +1382,7 @@ export default class MainScene extends Phaser.Scene {
 
       prevButton = this.add
         .text(panelX - 90, navY, "< PREV", {
-          fontFamily: "Arial Black, Arial, sans-serif",
+          fontFamily: UI_FONT_STACK,
           fontSize: "16px",
           color: this.gameModalPage > 0 ? "#ffd400" : "#666666"
         })
@@ -1037,7 +1391,7 @@ export default class MainScene extends Phaser.Scene {
 
       nextButton = this.add
         .text(panelX + 90, navY, "NEXT >", {
-          fontFamily: "Arial Black, Arial, sans-serif",
+          fontFamily: UI_FONT_STACK,
           fontSize: "16px",
           color: this.gameModalPage < totalPages - 1 ? "#ffd400" : "#666666"
         })
